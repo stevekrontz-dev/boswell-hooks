@@ -22,11 +22,13 @@ from pathlib import Path
 REASON = (
     "SESSION-CLOSE GATE — before this session ends, post the Tested-and-Complete report. "
     "For EVERY file touched this session, mark it VERIFIED COMPLETE (with evidence) or "
-    "INCOMPLETE/UNTESTED (flagged) — no silent done. Confirm the gates that apply: "
-    "(1) reuse-scoped (2) php -l clean (3) deployed + live commit hash matches "
-    "(4) functionally proven on the real target with captured output "
-    "(5) test artifacts cleaned up (6) Boswell recorded. If every touched file is already "
-    "verified above, give the one-line per-file status and stop."
+    "INCOMPLETE/UNTESTED (flagged) — no silent done. Confirm the gates that APPLY to this "
+    "project (skip the ones that don't): (1) reuse-scoped — no needless new code; "
+    "(2) lint/syntax clean for the language touched (e.g. py_compile / tsc / php -l); "
+    "(3) if it deploys, deployed + live version/commit verified; "
+    "(4) functionally proven on the real target with captured output; "
+    "(5) test artifacts cleaned up; (6) memory/Boswell recorded if applicable. "
+    "If every touched file is already verified above, give the one-line per-file status and stop."
 )
 
 MUTATION_RE = re.compile(r'"name"\s*:\s*"(Edit|Write|MultiEdit|NotebookEdit)"')

@@ -103,7 +103,9 @@ def _session_end(data):
     import boswell
     import transcript_monitor
     _safe(boswell.session_end)
-    _safe(boswell.sync_session)
+    # sync_session removed: it POSTed to a /sync endpoint that 404s (the real
+    # route is /v2/sync with a different payload). The actual session record is
+    # the transcript capture below, not this dead call.
     _safe(transcript_monitor.capture)
     # Drain the just-captured card (and any backlog) to Boswell in Python, so a
     # transcript never sits waiting on the LLM to honor a marker next session.
