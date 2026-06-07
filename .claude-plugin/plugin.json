@@ -1,0 +1,9 @@
+{
+  "name": "boswell-hooks",
+  "description": "Boswell session governance + transcript capture for Claude Code: a session-close Tested-and-Complete gate (Stop); SessionStart banner + Python drain of pending transcripts to /v2/commit (fallback marker only on failure); a git-push safety guard that blocks force-push to deploy remotes (PreToolUse/Bash); per-tool activity logging + 30-min transcript heartbeat (PostToolUse); and once-per-session boswell end/sync + transcript capture + flush (SessionEnd). Commits authenticate via a tenant-scoped bos_ API key read from ~/.boswell/hook_key (X-API-Key) — portable across machines/tenants via ${CLAUDE_PLUGIN_ROOT}; all state stays machine-local under ~. See INSTALL.md.",
+  "version": "1.1.0",
+  "author": {
+    "name": "Tint Atlanta"
+  },
+  "hooks": "./hooks/hooks.json"
+}
