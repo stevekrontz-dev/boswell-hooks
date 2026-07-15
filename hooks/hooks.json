@@ -2,33 +2,105 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py\" SessionStart"
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SessionStart",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SessionStart'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Loading Boswell continuity"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" UserPromptSubmit",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','UserPromptSubmit'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 20,
+            "statusMessage": "Retrieving relevant Boswell memories"
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|shell_command|apply_patch|Edit|Write|mcp__.*boswell.*commit",
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py\" PreToolUse",
-            "timeout": 10
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PreToolUse",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PreToolUse'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 10,
+            "statusMessage": "Applying Boswell governance"
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Edit|Write|Bash",
+        "matcher": "Bash|shell_command|apply_patch|Edit|Write|mcp__.*boswell.*|mcp__codex_apps__boswell_.*",
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py\" PostToolUse"
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PostToolUse",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PostToolUse'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PreCompact",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PreCompact'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 15,
+            "statusMessage": "Checkpointing continuity"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PostCompact",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PostCompact'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SubagentStart",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SubagentStart'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SubagentStop",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SubagentStop'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 10
           }
         ]
       }
@@ -38,18 +110,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py\" Stop",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py\" SessionEnd"
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" Stop",
+            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','Stop'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "timeout": 15,
+            "statusMessage": "Closing the Boswell loop"
           }
         ]
       }

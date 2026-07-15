@@ -1,0 +1,35 @@
+{
+  "name": "boswell-hooks",
+  "version": "2.0.0+codex.20260715181150",
+  "description": "Boswell memory, retrieval, transcript, and completion-governance hooks for Codex.",
+  "author": {
+    "name": "Steve Krontz",
+    "url": "https://github.com/stevekrontz-dev"
+  },
+  "homepage": "https://github.com/stevekrontz-dev/boswell-hooks",
+  "repository": "https://github.com/stevekrontz-dev/boswell-hooks",
+  "license": "MIT",
+  "keywords": [
+    "boswell",
+    "memory",
+    "hooks",
+    "governance",
+    "continuity"
+  ],
+  "interface": {
+    "displayName": "Boswell Hooks",
+    "shortDescription": "Persistent memory and lifecycle governance for Codex.",
+    "longDescription": "Loads Boswell before the first response, retrieves relevant memories on substantive prompts, guards corrective writes, checkpoints compaction, verifies changed work, and spools transcripts durably.",
+    "developerName": "Steve Krontz",
+    "category": "Productivity",
+    "capabilities": [
+      "Memory",
+      "Governance",
+      "Transcripts"
+    ],
+    "defaultPrompt": [
+      "Show the Boswell context loaded for this thread.",
+      "Check the active Boswell tasks for this project."
+    ]
+  }
+}

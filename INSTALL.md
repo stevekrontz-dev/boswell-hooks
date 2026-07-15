@@ -1,86 +1,77 @@
 # boswell-hooks — Install Guide
 
-The Boswell **Base Workflow** for Claude Code: automatic session recording,
-transcript capture that commits itself to your Boswell tenant, a session-close
-"Tested-and-Complete" gate, and a git-push safety guard. Portable across
-machines and tenants — the only per-machine thing is your API key.
+Boswell's base workflow for Codex and Claude Code: structural startup context,
+prompt-time retrieval, read-before-corrective-write governance, transcript
+capture, compaction recovery, completion verification, and git-push safety.
 
 ## Prerequisites
-- Claude Code installed.
-- A Boswell account/tenant (sign up at the Boswell dashboard).
-- Python 3 on PATH (the hooks are Python; `requests` is the only third-party dep).
 
-## 1. Install the plugin
-Place the `boswell-hooks/` directory under your Claude Code skills dir:
+- Codex or Claude Code
+- Python 3.10+
+- A Boswell tenant and tenant-scoped `bos_...` API key
 
-```
-~/.claude/skills/boswell-hooks/
-  .claude-plugin/plugin.json
-  hooks/hooks.json
-  scripts/...
-  INSTALL.md
-```
+The Codex adapter uses only Python's standard library. The legacy Claude
+transcript path still uses `requests`.
 
-(Steve's machines sync this via the `~/.claude/skills` rail; a new tenant just
-copies the directory in.) Then in Claude Code run `/reload-plugins` — you should
-see `boswell-hooks` among the loaded plugins and its hooks counted.
+## Authentication
 
-## 2. Get your tenant-scoped API key (`bos_…`)
-The hook commits to Boswell with **your** key, so commits land in **your**
-tenant. Two ways to get one:
+Put the tenant API key on one line in this machine-local file:
 
-- **At signup** — `POST /v2/onboard/provision` returns `api_key` in its response.
-- **Anytime** — Boswell dashboard → **Connect** → **Generate New API Key**
-  (copy it immediately; it is shown once).
-
-This is a standard tenant API key (`bos_…`); it is NOT the internal/admin secret.
-
-## 3. Place the key
-Write the key as a single line to a machine-local file (never synced, never
-committed):
-
-```
+```text
 ~/.boswell/hook_key
 ```
 
-Example (PowerShell):
+`BOSWELL_API_KEY` overrides the file. Steve's single-tenant fleet may instead
+use `~/.boswell/.internal-secret`; that fallback is not portable to tenants.
+
+Never place credentials inside the plugin, `hooks.json`, or a repository.
+
+## Codex installation
+
+Personal development installs live at `~/plugins/boswell-hooks` and are exposed
+by `~/.agents/plugins/marketplace.json`.
+
 ```powershell
-Set-Content -Path "$HOME\.boswell\hook_key" -Value "bos_your_key_here" -NoNewline
+codex plugin add boswell-hooks@personal
 ```
 
-Alternatively set the `BOSWELL_API_KEY` environment variable — it takes
-precedence over the file.
+Open `/hooks`, inspect the exact command-hook definitions, and trust them. Hook
+trust is hash-bound, so changed definitions require review again. Start a new
+thread after installation or update; lifecycle hooks are loaded at thread
+startup.
 
-## 4. Verify
-```
-python ~/.claude/skills/boswell-hooks/scripts/config.py
-#   → BOSWELL_API_BASE = https://…  and  hook_api_key() present = True
+The plugin automatically discovers `hooks/hooks.json`. Do not add a `hooks`
+field to `.codex-plugin/plugin.json`.
 
-python ~/.claude/skills/boswell-hooks/scripts/transcript_monitor.py flush
-#   → flush: committed=N remaining=0   (0 remaining = all queued transcripts committed)
-```
-If `remaining > 0`, commits are failing — check the key and `BOSWELL_API_BASE`.
-**Nothing is ever lost on failure:** entries are retained and a fallback marker
-asks an authenticated Claude to commit them via MCP.
+## Claude Code installation
 
-## Configuration (all optional, env-overridable)
+Claude Code reads `.claude-plugin/plugin.json`, which points at
+`hooks/claude-hooks.json`. Install through the existing Claude plugin/skill
+rail, then reload plugins.
+
+## Configuration
+
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `BOSWELL_API_KEY` | — | API key (overrides the key file) |
-| `BOSWELL_HOOK_KEY_FILE` | `~/.boswell/hook_key` | key file location |
-| `BOSWELL_API_BASE` | Boswell v3 Railway URL | point at your own deployment |
-| `BOSWELL_HOOK_STATE` | `~/.claude/hooks/state` | hook state/queue dir |
-| `BOSWELL_TRANSCRIPTS_ARCHIVE` | `~/boswell-transcripts` | raw transcript archive |
-| `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | where Claude Code session JSONLs live |
+|---|---|---|
+| `BOSWELL_API_KEY` | — | Tenant key; overrides files |
+| `BOSWELL_HOOK_KEY_FILE` | `~/.boswell/hook_key` | Tenant-key file |
+| `BOSWELL_INTERNAL_SECRET_FILE` | `~/.boswell/.internal-secret` | Steve-only fallback |
+| `BOSWELL_API_BASE` | Production Railway API | Boswell deployment |
+| `BOSWELL_AGENT_ID` | `Codex-Root` | Agent-specific startup tasks |
+| `BOSWELL_HOOK_STATE` | `~/.boswell/codex-hooks` | State and outbound queue |
+| `BOSWELL_TRANSCRIPTS_ARCHIVE` | `~/boswell-transcripts` | Raw transcript archive |
+| `BOSWELL_HOOKS_FAIL_OPEN` | unset | Emergency diagnostic override |
 
-## What each hook does
-- **SessionStart** — prints the Boswell banner; drains any pending transcripts to
-  `/v2/commit` in Python (no LLM needed).
-- **PreToolUse (Bash)** — blocks `git push --force` to deploy remotes
-  (`production`/`staging`); asks before any bare `--force`. Fail-open.
-- **PostToolUse** — logs tool activity; every ~30 min re-captures a growing session.
-- **Stop** — the session-close Tested-and-Complete gate.
-- **SessionEnd** — boswell end/sync + capture this session + flush to Boswell.
+Startup and retrieval fail closed by default. Transcript capture and telemetry
+remain queued locally on failure. See `CODEX.md` for the lifecycle contract.
 
-All state is machine-local under `~`; the synced plugin dir holds no secrets and
-no per-machine state.
+## Verification
+
+```powershell
+python -m unittest discover -s tests -v
+python -m json.tool hooks/hooks.json
+python scripts/codex_dispatcher.py SessionStart
+```
+
+The dispatcher expects hook JSON on stdin; the final command without stdin is
+only a failure-policy probe. Normal invocation is owned by Codex.
