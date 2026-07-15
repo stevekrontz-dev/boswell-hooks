@@ -40,10 +40,22 @@ class CodexHookTests(unittest.TestCase):
 
     def test_hook_manifests_split_codex_and_claude_events(self):
         codex = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        claude = json.loads((ROOT / "hooks" / "claude-hooks.json").read_text(encoding="utf-8"))
+        claude = json.loads((ROOT / "claude" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         self.assertNotIn("SessionEnd", codex["hooks"])
         self.assertIn("PreCompact", codex["hooks"])
         self.assertIn("SessionEnd", claude["hooks"])
+        for groups in claude["hooks"].values():
+            for group in groups:
+                for hook in group["hooks"]:
+                    self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py", hook["command"])
+
+    def test_claude_runtime_root_does_not_expose_codex_default_hooks(self):
+        manifest = json.loads(
+            (ROOT / "claude" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("hooks", manifest)
+        self.assertFalse((ROOT / ".claude-plugin" / "plugin.json").exists())
+        self.assertFalse((ROOT / "hooks" / "claude-hooks.json").exists())
 
     def test_greeting_is_not_a_semantic_retrieval(self):
         self.assertFalse(session_state.substantive("good afternoon"))

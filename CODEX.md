@@ -1,9 +1,11 @@
 # Codex lifecycle
 
 The Codex plugin is discovered through `.codex-plugin/plugin.json` and the
-default `hooks/hooks.json`. Claude Code uses `hooks/claude-hooks.json`; the two
-event catalogs intentionally remain separate because Codex has compaction and
-subagent hooks but no `SessionEnd` event.
+default `hooks/hooks.json`. Claude Code is installed from the isolated
+`claude/` runtime root, whose own default `hooks/hooks.json` points back to the
+shared scripts. The event catalogs must live under distinct plugin roots because
+both runtimes auto-discover the same default hook filename; Codex has compaction
+and subagent hooks but no `SessionEnd` event.
 
 ## Closed loop
 

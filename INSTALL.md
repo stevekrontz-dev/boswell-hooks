@@ -45,9 +45,14 @@ field to `.codex-plugin/plugin.json`.
 
 ## Claude Code installation
 
-Claude Code reads `.claude-plugin/plugin.json`, which points at
-`hooks/claude-hooks.json`. Install through the existing Claude plugin/skill
-rail, then reload plugins.
+Install the repository's `claude/` subdirectory as the Claude plugin root. Do
+not install the repository root into Claude Code: both Claude and Codex
+auto-discover `hooks/hooks.json`, and the root file is Codex-specific.
+
+For a personal checkout at `~/plugins/boswell-hooks`, point the Claude skills
+entry at `~/plugins/boswell-hooks/claude`, then reload plugins. A tiny shim
+inside that isolated runtime root resolves the checkout and dispatches into the
+shared scripts.
 
 ## Configuration
 
@@ -70,6 +75,7 @@ remain queued locally on failure. See `CODEX.md` for the lifecycle contract.
 ```powershell
 python -m unittest discover -s tests -v
 python -m json.tool hooks/hooks.json
+python -m json.tool claude/hooks/hooks.json
 python scripts/codex_dispatcher.py SessionStart
 ```
 

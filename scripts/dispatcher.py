@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """boswell-hooks plugin: single hook entry point.
 
-Invoked as:  python "${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py" <EventName>
+Invoked through: python "${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py" <EventName>
 
 Reads the hook JSON from stdin ONCE and routes to in-process handlers (one
 Python process per event instead of one per command). Every handler is wrapped

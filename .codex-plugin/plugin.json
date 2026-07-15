@@ -1,6 +1,6 @@
 {
   "name": "boswell-hooks",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Boswell memory, retrieval, transcript, and completion-governance hooks for Codex.",
   "author": {
     "name": "Steve Krontz",

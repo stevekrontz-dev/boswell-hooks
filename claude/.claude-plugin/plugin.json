@@ -1,0 +1,6 @@
+{
+  "name": "boswell-hooks",
+  "description": "Boswell session governance and transcript capture for Claude Code. See ../INSTALL.md.",
+  "version": "2.0.2",
+  "author": {"name": "Steve Krontz"}
+}
