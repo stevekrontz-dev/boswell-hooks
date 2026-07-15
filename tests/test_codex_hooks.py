@@ -48,6 +48,8 @@ class CodexHookTests(unittest.TestCase):
             for group in groups:
                 for hook in group["hooks"]:
                     self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py", hook["command"])
+                    self.assertIn("command -v python", hook["command"])
+                    self.assertIn("else python3", hook["command"])
 
     def test_hook_output_is_safe_on_legacy_windows_code_pages(self):
         class AsciiOnly:
