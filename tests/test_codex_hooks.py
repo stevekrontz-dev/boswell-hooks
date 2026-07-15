@@ -18,7 +18,7 @@ import session_state
 
 class CodexHookTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=r"C:\tmp")
+        self.temp = tempfile.TemporaryDirectory()
         self.state_root = Path(self.temp.name) / "sessions"
         self.state_patch = mock.patch.object(session_state, "STATE_ROOT", self.state_root)
         self.state_patch.start()
