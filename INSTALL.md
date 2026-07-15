@@ -7,7 +7,8 @@ capture, compaction recovery, completion verification, and git-push safety.
 ## Prerequisites
 
 - Codex or Claude Code
-- Python 3.10+
+- Python 3.10+ for Codex; the isolated Claude adapter remains compatible with
+  Python 3.9 where its legacy `requests` dependency is already installed
 - A Boswell tenant and tenant-scoped `bos_...` API key
 
 The Codex adapter uses only Python's standard library. The legacy Claude
