@@ -74,16 +74,40 @@ def _post_tool(data):
     if tool == "Bash":
         import transcript_monitor
         _safe(transcript_monitor.heartbeat)
+    # Record qualifying Boswell reads (search/recall/semantic_search/fetch) into
+    # the per-session read-state ledger that corrective_gate consults. Without
+    # this the gate has no evidence ledger to check and silently allows every
+    # corrective write — the gate would exist but never fire.
+    import readstate
+    _safe(readstate.record, data)
 
 
 def _pre_tool(data):
-    # Emits PreToolUse decision JSON on stdout (deny/ask) to block destructive
-    # git pushes. Fail-open: any error → no output → tool proceeds normally.
+    # Emits a PreToolUse decision (deny/ask) on stdout. Two independent,
+    # mutually-exclusive guards: git_guard fires only on Bash `git push`,
+    # corrective_gate fires only on the Boswell commit tool. Each is fail-open
+    # (returns None when not applicable / on error), so only one can ever
+    # produce a decision for a given call.
+    #
+    # corrective_gate + readstate were carried forward from the v1 plugin
+    # (~/.claude/skills/boswell-hooks) on 2026-07-15. v2 shipped git_guard but
+    # dropped both, so neither plugin was a superset: v1 had the
+    # read-before-corrective-write gate and a DEAD `import git_guard`; v2 had a
+    # working git_guard and no corrective gate. INSTALL.md advertises
+    # "read-before-corrective-write governance", so v2 alone did not match its
+    # own documentation. This merge is what both files claimed to be.
+    result = None
     try:
         import git_guard
         result = git_guard.evaluate(data)
     except Exception:
         result = None
+    if result is None:
+        try:
+            import corrective_gate
+            result = corrective_gate.evaluate(data)
+        except Exception:
+            result = None
     if result:
         sys.stdout.write(json.dumps(result))
 

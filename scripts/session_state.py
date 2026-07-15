@@ -16,6 +16,12 @@ GREETING_RE = re.compile(
     r"^\s*(hi|hello|hey|good\s+(morning|afternoon|evening)|yo|sup)[!,.\s]*$",
     re.IGNORECASE,
 )
+FOLLOWUP_RE = re.compile(
+    r"^\s*(yes|no|okay|ok|sure|right|exactly|go ahead|do it|design it|build it|"
+    r"fix it|ship it|continue|proceed|what about (it|that|those|this|them))"
+    r"[!,.?\s]*$",
+    re.IGNORECASE,
+)
 
 
 def safe_session_id(value: str | None) -> str:
@@ -80,3 +86,14 @@ def substantive(prompt: str) -> bool:
         return False
     return len(tokens(prompt)) >= 2 or len(prompt.strip()) >= 24
 
+
+def retrieval_eligible(prompt: str) -> bool:
+    """Conservative temporary gate for automatic prompt-time retrieval.
+
+    Automatic context has a much higher precision requirement than an explicit
+    search. Short conversational continuations inherit the active thread and
+    should not launch a global memory query on their own.
+    """
+    if not substantive(prompt) or FOLLOWUP_RE.match(prompt):
+        return False
+    return len(tokens(prompt)) >= 4

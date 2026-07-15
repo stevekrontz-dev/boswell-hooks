@@ -3,8 +3,20 @@
 PreToolUse(Bash) handler. Pure-string inspection of `git push` commands — no
 network, no subprocess, no latency. Blocks the one IRREVERSIBLE footgun in
 Steve's deploy setup: force-pushing to a HostGator deploy remote, which erases
-the production auto-backup commits (they are NOT recoverable). Also asks for
-confirmation on any bare --force push (nudge toward --force-with-lease).
+the production auto-backup commits (they are NOT recoverable).
+
+TWO DIFFERENT RULES — do not collapse them (docstring corrected 2026-07-15
+after a self-test showed the text and the behavior disagreed):
+
+  * DEPLOY remotes (production/staging): ANY force is DENIED, and that
+    deliberately INCLUDES --force-with-lease. A lease only protects refs you
+    have not fetched; once the backup bot's commits are in your local ref cache
+    the lease check passes and the force still erases them. Boswell DEPLOY
+    REFERENCE 868dea38 is absolute: "NEVER force-push (it erases the backups).
+    Reconcile with a merge." There is no lease-shaped exception, so do not
+    "fix" this by letting --force-with-lease through on these remotes.
+  * EVERY OTHER remote (origin, feature repos): a bare --force/-f gets an ASK
+    that nudges toward --force-with-lease. That nudge applies HERE only.
 
 Why a guard and not discipline: the permission allowlist is wide-open
 (Bash allowed, dangerous-mode prompt skipped), so this handler is the only

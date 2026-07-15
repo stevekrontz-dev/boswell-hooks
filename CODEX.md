@@ -9,8 +9,10 @@ subagent hooks but no `SessionEnd` event.
 
 1. `SessionStart` calls `/v2/startup` once per `session_id`, caches the raw
    response, and injects the governed projection before the first response.
-2. `UserPromptSubmit` skips greetings and runs hybrid retrieval for substantive
-   prompts. The returned evidence is injected and recorded for write guards.
+2. `UserPromptSubmit` skips greetings and short follow-ups, then applies a
+   temporary precision-first gate to hybrid retrieval: only strong semantic
+   matches are eligible, noisy content classes are excluded, and at most two
+   memories are injected. Explicit Boswell search remains the broad-recall path.
 3. `PreToolUse` blocks material work without startup, blocks unsafe force pushes,
    and requires a matching read before corrective Boswell commits.
 4. `PostToolUse` maintains mutation, verification, and Boswell-read ledgers.
@@ -31,4 +33,3 @@ Secrets are never stored in the plugin or hook output.
 
 State defaults to `~/.boswell/codex-hooks` and raw transcripts to
 `~/boswell-transcripts/<machine>/<YYYY-MM>/`.
-

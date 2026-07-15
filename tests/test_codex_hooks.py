@@ -48,6 +48,9 @@ class CodexHookTests(unittest.TestCase):
     def test_greeting_is_not_a_semantic_retrieval(self):
         self.assertFalse(session_state.substantive("good afternoon"))
         self.assertTrue(session_state.substantive("How should Codex load Boswell context?"))
+        self.assertFalse(session_state.retrieval_eligible("design it"))
+        self.assertTrue(session_state.retrieval_eligible(
+            "How should Codex load Boswell context?"))
 
     @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
     @mock.patch.object(dispatcher.boswell_client, "startup")
@@ -68,12 +71,61 @@ class CodexHookTests(unittest.TestCase):
             "message": "Codex hook architecture",
             "content": "corrective memory read evidence",
             "blob_hash": "abc",
+            "content_type": "methodology",
+            "distance": 0.42,
         }]}
         result = dispatcher._user_prompt({
             "session_id": "s2", "prompt": "Build the Codex hook architecture",
         })
         self.assertIn("RELEVANT MEMORIES", result["hookSpecificOutput"]["additionalContext"])
         self.assertIn("corrective", session_state.load("s2")["boswell_read_tokens"])
+
+    @mock.patch.object(dispatcher.boswell_client, "search")
+    def test_short_followup_does_not_search(self, search):
+        session_state.save("followup", {"startup_loaded": True})
+        self.assertIsNone(dispatcher._user_prompt({
+            "session_id": "followup", "prompt": "design it",
+        }))
+        search.assert_not_called()
+
+    @mock.patch.object(dispatcher.boswell_client, "search")
+    def test_automatic_retrieval_abstains_on_weak_results(self, search):
+        session_state.save("noise", {"startup_loaded": True})
+        search.return_value = {"results": [{
+            "message": "Drafted touch for lead 349",
+            "content": '{"biographical_weight":"low","user_participation":"minimal"}',
+            "blob_hash": "noise",
+            "content_type": "memory",
+            "distance": 0.61,
+        }]}
+        self.assertIsNone(dispatcher._user_prompt({
+            "session_id": "noise",
+            "prompt": "Are these hook memories too noisy for this conversation?",
+        }))
+        self.assertEqual(session_state.load("noise")["last_retrieval"], [])
+
+    @mock.patch.object(dispatcher.boswell_client, "search")
+    def test_automatic_retrieval_caps_and_filters_results(self, search):
+        session_state.save("filter", {"startup_loaded": True})
+        search.return_value = {"results": [
+            {"message": "raw transcript", "content": "x", "blob_hash": "t",
+             "content_type": "transcript", "distance": 0.20},
+            {"message": "one", "content": "first", "blob_hash": "1",
+             "content_type": "methodology", "distance": 0.40},
+            {"message": "two", "content": "second", "blob_hash": "2",
+             "content_type": "memory", "distance": 0.45},
+            {"message": "three", "content": "third", "blob_hash": "3",
+             "content_type": "memory", "distance": 0.46},
+        ]}
+        result = dispatcher._user_prompt({
+            "session_id": "filter",
+            "prompt": "Explain the Boswell hook retrieval architecture now",
+        })
+        injected = result["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("raw transcript", injected)
+        self.assertIn('"message":"one"', injected)
+        self.assertIn('"message":"two"', injected)
+        self.assertNotIn('"message":"three"', injected)
 
     def test_material_tool_is_denied_without_startup(self):
         result = dispatcher._pre_tool({

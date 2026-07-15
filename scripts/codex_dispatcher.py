@@ -39,6 +39,16 @@ READ_TOOL_RE = re.compile(r"boswell_(search|semantic_search|recall|fetch|head|lo
 MUTATION_TOOLS = {"apply_patch", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 MATERIAL_TOOLS = MUTATION_TOOLS | {"Bash", "shell_command"}
 
+# Temporary precision-first containment for prompt-time retrieval. The Atlas
+# Context Assembly plan owns the durable read path; this hook only suppresses
+# obvious noise until that shadow path is ready.
+AUTO_CONTEXT_MAX_DISTANCE = 0.50
+AUTO_CONTEXT_MAX_RESULTS = 2
+AUTO_CONTEXT_CONTENT_CHARS = 600
+AUTO_CONTEXT_EXCLUDED_TYPES = {
+    "agent_artifact", "credential", "sacred_manifest", "skill", "task", "transcript",
+}
+
 
 def _input() -> dict:
     try:
@@ -131,9 +141,54 @@ def _prompt_text(data: dict) -> str:
     return ""
 
 
+def _automatic_context_candidate(item: object) -> dict | None:
+    """Return a slim high-confidence candidate or abstain.
+
+    This deliberately requires an absolute semantic distance. General Boswell
+    search ranks the best available rows even when all are poor; rank alone is
+    not sufficient evidence for automatic context injection.
+    """
+    if not isinstance(item, dict):
+        return None
+    try:
+        distance = float(item.get("distance"))
+    except (TypeError, ValueError):
+        return None
+    if distance > AUTO_CONTEXT_MAX_DISTANCE:
+        return None
+
+    content_type = str(item.get("content_type") or "memory").lower()
+    if content_type in AUTO_CONTEXT_EXCLUDED_TYPES:
+        return None
+
+    content = str(item.get("content") or "")
+    try:
+        metadata = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    if isinstance(metadata, dict):
+        if str(metadata.get("biographical_weight") or "").lower() == "low":
+            return None
+        if str(metadata.get("user_participation") or "").lower() in {
+            "agent_only", "minimal",
+        }:
+            return None
+        if str(metadata.get("curation_stage") or "").lower() == "agent_outcome_v1":
+            return None
+
+    return {
+        "message": item.get("message"),
+        "branch": item.get("branch"),
+        "content_type": item.get("content_type"),
+        "blob_hash": item.get("blob_hash"),
+        "distance": round(distance, 4),
+        "content": content[:AUTO_CONTEXT_CONTENT_CHARS],
+    }
+
+
 def _user_prompt(data: dict) -> dict | None:
     prompt = _prompt_text(data)
-    if not session_state.substantive(prompt):
+    if not session_state.retrieval_eligible(prompt):
         return None
     sid = data.get("session_id")
     state = session_state.load(sid)
@@ -149,24 +204,22 @@ def _user_prompt(data: dict) -> dict | None:
     results = response.get("results") or []
     slim = []
     read_tokens = set(state.get("boswell_read_tokens") or [])
-    for item in results[:5]:
-        if not isinstance(item, dict):
+    for item in results:
+        row = _automatic_context_candidate(item)
+        if row is None:
             continue
-        row = {
-            "message": item.get("message"),
-            "branch": item.get("branch"),
-            "content_type": item.get("content_type"),
-            "blob_hash": item.get("blob_hash"),
-            "content": str(item.get("content") or "")[:900],
-        }
         slim.append(row)
         read_tokens.update(session_state.tokens(row))
+        if len(slim) >= AUTO_CONTEXT_MAX_RESULTS:
+            break
     state["last_prompt_fingerprint"] = fingerprint
     state["last_prompt_tokens"] = sorted(session_state.tokens(prompt))[:250]
     state["boswell_read_tokens"] = sorted(read_tokens)[:1000]
     state["last_retrieval"] = slim
     state["last_retrieval_at"] = time.time()
     session_state.save(sid, state)
+    if not slim:
+        return None
     text = "BOSWELL RELEVANT MEMORIES for the current human prompt:\n" + json.dumps(
         slim, ensure_ascii=False, separators=(",", ":"))
     return _context("UserPromptSubmit", text)
