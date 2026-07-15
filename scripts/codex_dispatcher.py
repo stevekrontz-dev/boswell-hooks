@@ -60,7 +60,10 @@ def _input() -> dict:
 
 def _emit(value: dict | None) -> None:
     if value:
-        sys.stdout.write(json.dumps(value, ensure_ascii=False))
+        # Hook subprocess stdout can inherit a legacy Windows code page even
+        # though Codex expects JSON. ASCII escapes preserve the exact Unicode
+        # payload while avoiding UnicodeEncodeError before Codex can parse it.
+        sys.stdout.write(json.dumps(value, ensure_ascii=True))
 
 
 def _context(event: str, text: str, *, system_message: str | None = None) -> dict:

@@ -49,6 +49,20 @@ class CodexHookTests(unittest.TestCase):
                 for hook in group["hooks"]:
                     self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/dispatcher.py", hook["command"])
 
+    def test_hook_output_is_safe_on_legacy_windows_code_pages(self):
+        class AsciiOnly:
+            def __init__(self):
+                self.value = ""
+
+            def write(self, value):
+                value.encode("ascii")
+                self.value += value
+
+        stream = AsciiOnly()
+        with mock.patch.object(dispatcher.sys, "stdout", stream):
+            dispatcher._emit({"context": "memory — continuity"})
+        self.assertEqual(json.loads(stream.value)["context"], "memory — continuity")
+
     def test_claude_runtime_root_does_not_expose_codex_default_hooks(self):
         manifest = json.loads(
             (ROOT / "claude" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
