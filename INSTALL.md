@@ -22,8 +22,16 @@ Put the tenant API key on one line in this machine-local file:
 ~/.boswell/hook_key
 ```
 
-`BOSWELL_API_KEY` overrides the file. Steve's single-tenant fleet may instead
-use `~/.boswell/.internal-secret`; that fallback is not portable to tenants.
+For multi-tenant machines, put each key in
+`~/.boswell/tenants/<name>.key`, write the safe default name to
+`~/.boswell/default_tenant`, and set `BOSWELL_TENANT=<name>` only for sessions
+that need another tenant. A selected named profile outranks
+`BOSWELL_API_KEY`; a missing selected profile fails closed.
+
+Machines without named profiles keep the legacy precedence:
+`BOSWELL_API_KEY`, then `~/.boswell/hook_key`. Steve's single-tenant fleet may
+finally use `~/.boswell/.internal-secret`; that fallback is not portable to
+tenants.
 
 Never place credentials inside the plugin, `hooks.json`, or a repository.
 
@@ -59,7 +67,10 @@ shared scripts.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BOSWELL_API_KEY` | — | Tenant key; overrides files |
+| `BOSWELL_API_KEY` | — | Portable tenant key when no named profile is selected |
+| `BOSWELL_TENANT` | default profile | Explicit named tenant profile |
+| `BOSWELL_TENANT_PROFILE_ROOT` | `~/.boswell/tenants` | Named key files |
+| `BOSWELL_DEFAULT_TENANT_FILE` | `~/.boswell/default_tenant` | Safe default profile name |
 | `BOSWELL_HOOK_KEY_FILE` | `~/.boswell/hook_key` | Tenant-key file |
 | `BOSWELL_INTERNAL_SECRET_FILE` | `~/.boswell/.internal-secret` | Steve-only fallback |
 | `BOSWELL_API_BASE` | Production Railway API | Boswell deployment |

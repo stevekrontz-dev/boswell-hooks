@@ -13,6 +13,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import codex_dispatcher as dispatcher
+import codex_config
 import session_state
 
 
@@ -64,6 +65,36 @@ class CodexHookTests(unittest.TestCase):
         with mock.patch.object(dispatcher.sys, "stdout", stream):
             dispatcher._emit({"context": "memory — continuity"})
         self.assertEqual(json.loads(stream.value)["context"], "memory — continuity")
+
+    def test_named_tenant_profile_outranks_stale_environment_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "main.key").write_text("profile-key", encoding="utf-8")
+            with (
+                mock.patch.object(codex_config, "TENANT_PROFILE_ROOT", root),
+                mock.patch.object(codex_config, "DEFAULT_TENANT_FILE", root / "missing"),
+                mock.patch.dict(
+                    codex_config.os.environ,
+                    {"BOSWELL_TENANT": "main", "BOSWELL_API_KEY": "stale-key"},
+                    clear=False,
+                ),
+            ):
+                self.assertEqual(
+                    codex_config.auth_headers(), {"X-API-Key": "profile-key"})
+
+    def test_missing_explicit_profile_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(codex_config, "TENANT_PROFILE_ROOT", root),
+                mock.patch.object(codex_config, "DEFAULT_TENANT_FILE", root / "missing"),
+                mock.patch.dict(
+                    codex_config.os.environ,
+                    {"BOSWELL_TENANT": "henry", "BOSWELL_API_KEY": "wrong-key"},
+                    clear=False,
+                ),
+            ):
+                self.assertEqual(codex_config.auth_headers(), {})
 
     def test_claude_runtime_root_does_not_expose_codex_default_hooks(self):
         manifest = json.loads(
