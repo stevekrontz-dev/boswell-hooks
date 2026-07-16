@@ -19,6 +19,18 @@ $ApiBase = if ($env:BOSWELL_API_BASE) {
 } else {
     'https://delightful-imagination-production-f6a1.up.railway.app'
 }
+$CanonicalTenantIds = @{
+    'main' = '00000000-0000-0000-0000-000000000001'
+    'tint-atlanta' = '51ac2193-9dd2-4cf3-9232-38bf6b555640'
+    'henry' = '74092d71-cc85-41d4-b4ac-5635478622d8'
+}
+
+function Get-ExpectedTenantId([string]$Name) {
+    if ($ExpectedTenantId) {
+        return $ExpectedTenantId
+    }
+    $CanonicalTenantIds[$Name]
+}
 
 function Get-ProfilePath([string]$Name) {
     Join-Path $ProfileRoot "$Name.key"
@@ -97,9 +109,10 @@ if ($Action -eq 'add') {
     New-Item -ItemType Directory -Force -Path $ProfileRoot | Out-Null
     Set-Content -LiteralPath (Get-ProfilePath $Tenant) -Value $key -NoNewline -Encoding ascii
     $identity = Get-TenantIdentity $Tenant $key
-    if ($ExpectedTenantId -and $identity.TenantId -ne $ExpectedTenantId) {
+    $expected = Get-ExpectedTenantId $Tenant
+    if ($expected -and $identity.TenantId -ne $expected) {
         Remove-Item -LiteralPath (Get-ProfilePath $Tenant) -Force
-        throw "Credential resolved to tenant $($identity.TenantId), not $ExpectedTenantId; profile removed."
+        throw "Credential resolved to tenant $($identity.TenantId), not $expected; profile removed."
     }
     $identity | Select-Object Profile, TenantId, BranchCount, HasWren
     return
@@ -107,8 +120,9 @@ if ($Action -eq 'add') {
 
 $profileKey = Get-ProfileKey $Tenant
 $identity = Get-TenantIdentity $Tenant $profileKey
-if ($ExpectedTenantId -and $identity.TenantId -ne $ExpectedTenantId) {
-    throw "Profile '$Tenant' resolved to $($identity.TenantId), not $ExpectedTenantId."
+$expected = Get-ExpectedTenantId $Tenant
+if ($expected -and $identity.TenantId -ne $expected) {
+    throw "Profile '$Tenant' resolved to $($identity.TenantId), not $expected."
 }
 
 Write-Host (
