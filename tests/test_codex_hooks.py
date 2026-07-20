@@ -193,6 +193,20 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(
             result["hookSpecificOutput"]["permissionDecision"], "deny")
 
+    def test_startup_cache_recovers_clobbered_mutable_state(self):
+        session_state.save_startup_cache("recovered", self.startup_payload())
+        session_state.save("recovered", {
+            "last_heartbeat": 123,
+            "boswell_read_tokens": ["continuity"],
+        })
+
+        self.assertIsNone(dispatcher._pre_tool({
+            "session_id": "recovered",
+            "tool_name": "apply_patch",
+            "tool_input": {},
+        }))
+        self.assertTrue(session_state.load("recovered")["startup_loaded"])
+
     def test_corrective_commit_requires_overlapping_read(self):
         session_state.save("s3", {"startup_loaded": True, "boswell_read_tokens": []})
         data = {

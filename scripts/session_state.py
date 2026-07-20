@@ -38,9 +38,18 @@ def load(session_id: str | None) -> dict:
     path = path_for(session_id)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
+        state = value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
-        return {}
+        state = {}
+
+    # The startup payload cache is written atomically before startup_loaded is
+    # recorded in the mutable session state. Treat that cache as the durable
+    # proof of continuity. Concurrent PostToolUse hooks can race while updating
+    # the mutable JSON and drop unrelated keys; that must not permanently lock
+    # an already-oriented session out of every material tool.
+    if not state.get("startup_loaded") and load_startup_cache(session_id) is not None:
+        state["startup_loaded"] = True
+    return state
 
 
 def save(session_id: str | None, state: dict) -> None:
