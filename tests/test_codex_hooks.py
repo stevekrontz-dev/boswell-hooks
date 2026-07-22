@@ -45,6 +45,10 @@ class CodexHookTests(unittest.TestCase):
         self.assertNotIn("SessionEnd", codex["hooks"])
         self.assertIn("PreCompact", codex["hooks"])
         self.assertIn("SessionEnd", claude["hooks"])
+        self.assertEqual(
+            codex["hooks"]["SessionStart"][0]["matcher"],
+            "startup|resume|clear|compact",
+        )
         for groups in claude["hooks"].values():
             for group in groups:
                 for hook in group["hooks"]:
@@ -207,7 +211,60 @@ class CodexHookTests(unittest.TestCase):
         }))
         self.assertTrue(session_state.load("recovered")["startup_loaded"])
 
+    def test_postcompact_validates_cache_without_injecting_context(self):
+        session_state.save_startup_cache("long-session", self.startup_payload())
+
+        for _ in range(10):
+            self.assertIsNone(dispatcher._post_compact({
+                "session_id": "long-session",
+                "trigger": "auto",
+            }))
+
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_compact_session_start_reuses_cache_without_context(self, startup):
+        session_state.save_startup_cache("compact-session", self.startup_payload())
+
+        for _ in range(10):
+            self.assertIsNone(dispatcher._session_start({
+                "session_id": "compact-session",
+                "source": "compact",
+            }))
+        startup.assert_not_called()
+
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_compact_session_start_fails_closed_without_cache(self, startup):
+        result = dispatcher._session_start({
+            "session_id": "missing-compact-cache",
+            "source": "compact",
+        })
+
+        self.assertFalse(result["continue"])
+        self.assertIn("orientation cache is missing", result["stopReason"])
+        startup.assert_not_called()
+
+    def test_postcompact_fails_closed_without_startup_cache(self):
+        result = dispatcher._post_compact({
+            "session_id": "missing-cache",
+            "trigger": "auto",
+        })
+
+        self.assertFalse(result["continue"])
+        self.assertIn("orientation cache is missing", result["stopReason"])
+
+    def test_material_tool_requires_durable_startup_cache(self):
+        session_state.save("orphaned-state", {"startup_loaded": True})
+
+        result = dispatcher._pre_tool({
+            "session_id": "orphaned-state",
+            "tool_name": "apply_patch",
+            "tool_input": {},
+        })
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_corrective_commit_requires_overlapping_read(self):
+        session_state.save_startup_cache("s3", self.startup_payload())
         session_state.save("s3", {"startup_loaded": True, "boswell_read_tokens": []})
         data = {
             "session_id": "s3",

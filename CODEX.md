@@ -18,8 +18,8 @@ and subagent hooks but no `SessionEnd` event.
 3. `PreToolUse` blocks material work without startup, blocks unsafe force pushes,
    and requires a matching read before corrective Boswell commits.
 4. `PostToolUse` maintains mutation, verification, and Boswell-read ledgers.
-5. `PreCompact` spools a checkpoint; `PostCompact` restores cached orientation
-   without calling startup again.
+5. `PreCompact` spools a checkpoint; `PostCompact` validates the durable startup
+   cache without reinjecting stale orientation into model context.
 6. `Stop` spools the latest transcript and blocks once when changed files have
    no recorded test, lint, or build evidence.
 

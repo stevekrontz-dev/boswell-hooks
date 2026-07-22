@@ -94,15 +94,15 @@ def _deny(reason: str) -> dict:
     }
 
 
-def _orientation(payload: dict, *, compact: bool = False) -> str:
+def _orientation(payload: dict) -> str:
     projection = {
         "local_time": payload.get("local_time"),
         "sacred_manifest": payload.get("sacred_manifest"),
-        "recent_thread": (payload.get("recent_thread") or [])[:5 if compact else 8],
+        "recent_thread": (payload.get("recent_thread") or [])[:8],
         "my_tasks": (payload.get("my_tasks") or [])[:5],
-        "open_tasks": (payload.get("open_tasks") or [])[:5 if compact else 12],
+        "open_tasks": (payload.get("open_tasks") or [])[:12],
         "expiring_bookmarks": (payload.get("expiring_bookmarks") or [])[:5],
-        "wren_bootloader": (payload.get("wren_bootloader") or [])[:6 if compact else 20],
+        "wren_bootloader": (payload.get("wren_bootloader") or [])[:20],
     }
     return (
         "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED for this conversation. "
@@ -116,6 +116,10 @@ def _session_start(data: dict) -> dict:
     sid = data.get("session_id")
     state = session_state.load(sid)
     cached = session_state.load_startup_cache(sid)
+    if data.get("source") == "compact":
+        if cached is None:
+            return _stop("Boswell orientation cache is missing after compaction.")
+        return None
     if not state.get("startup_loaded") or cached is None:
         try:
             cached = boswell_client.startup()
@@ -133,7 +137,7 @@ def _session_start(data: dict) -> dict:
         transcript_spool.flush_pending(exclude_session_id=str(sid) if sid else None)
     except Exception:
         pass
-    return _context("SessionStart", _orientation(cached, compact=data.get("source") == "compact"))
+    return _context("SessionStart", _orientation(cached))
 
 
 def _prompt_text(data: dict) -> str:
@@ -241,8 +245,13 @@ def _pre_tool(data: dict) -> dict | None:
     tool = _tool_name(data)
     sid = data.get("session_id")
     state = session_state.load(sid)
-    if (tool in MATERIAL_TOOLS or "boswell_commit" in tool) and not state.get("startup_loaded"):
-        return _deny("Boswell startup did not complete for this session. Load continuity before acting.")
+    requires_startup = tool in MATERIAL_TOOLS or "boswell_commit" in tool
+    durable_startup = session_state.load_startup_cache(sid) is not None
+    if requires_startup and (not state.get("startup_loaded") or not durable_startup):
+        return _deny(
+            "Boswell startup continuity is incomplete for this session. "
+            "Load continuity before acting."
+        )
 
     if tool in {"Bash", "shell_command"}:
         try:
@@ -334,7 +343,7 @@ def _post_compact(data: dict) -> dict | None:
     cached = session_state.load_startup_cache(data.get("session_id"))
     if not cached:
         return _stop("Boswell orientation cache is missing after compaction.")
-    return _context("PostCompact", _orientation(cached, compact=True))
+    return None
 
 
 def _subagent_start(data: dict) -> dict | None:
