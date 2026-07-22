@@ -11,6 +11,9 @@ and subagent hooks but no `SessionEnd` event.
 
 1. `SessionStart` calls `/v2/startup` once per `session_id`, caches the raw
    response, and injects the governed projection before the first response.
+   Cached `startup` and `resume` deliveries are zero-output successes so Codex
+   cannot replay the projection in bursts; `clear` reinjects the cached
+   orientation because it creates a fresh model context.
 2. `UserPromptSubmit` skips greetings and short follow-ups, then applies a
    temporary precision-first gate to hybrid retrieval: only strong semantic
    matches are eligible, noisy content classes are excluded, and at most two

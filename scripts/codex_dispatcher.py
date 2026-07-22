@@ -116,9 +116,18 @@ def _session_start(data: dict) -> dict:
     sid = data.get("session_id")
     state = session_state.load(sid)
     cached = session_state.load_startup_cache(sid)
-    if data.get("source") == "compact":
+    source = data.get("source")
+    if source == "compact":
         if cached is None:
             return _stop("Boswell orientation cache is missing after compaction.")
+        return None
+    # Codex can deliver more than one thread-start hook when a long session is
+    # resumed.  The original SessionStart context is already in the transcript,
+    # so replaying it on every cached startup/resume only duplicates developer
+    # context and can make the transcript grow explosively.  A clear event is
+    # different: it creates a fresh model context and therefore still needs the
+    # cached orientation below.
+    if source in {"startup", "resume"} and state.get("startup_loaded") and cached is not None:
         return None
     if not state.get("startup_loaded") or cached is None:
         try:

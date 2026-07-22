@@ -117,15 +117,29 @@ class CodexHookTests(unittest.TestCase):
 
     @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
     @mock.patch.object(dispatcher.boswell_client, "startup")
-    def test_startup_runs_exactly_once_per_session(self, startup, _flush):
+    def test_startup_and_context_run_exactly_once_per_session(self, startup, _flush):
         startup.return_value = self.startup_payload()
         data = {"session_id": "s1", "source": "startup"}
         first = dispatcher._session_start(data)
-        second = dispatcher._session_start({"session_id": "s1", "source": "resume"})
+        resumed = [
+            dispatcher._session_start({"session_id": "s1", "source": "resume"})
+            for _ in range(8)
+        ]
         self.assertEqual(startup.call_count, 1)
         self.assertEqual(session_state.load("s1")["startup_calls"], 1)
         self.assertIn("STRUCTURALLY LOADED", first["hookSpecificOutput"]["additionalContext"])
-        self.assertIn("STRUCTURALLY LOADED", second["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(resumed, [None] * 8)
+
+    @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_clear_reinjects_cached_orientation_without_backend_startup(self, startup, _flush):
+        session_state.save_startup_cache("cleared", self.startup_payload())
+        session_state.save("cleared", {"startup_loaded": True, "startup_calls": 1})
+
+        result = dispatcher._session_start({"session_id": "cleared", "source": "clear"})
+
+        startup.assert_not_called()
+        self.assertIn("STRUCTURALLY LOADED", result["hookSpecificOutput"]["additionalContext"])
 
     @mock.patch.object(dispatcher.boswell_client, "search")
     def test_substantive_prompt_retrieves_and_records_evidence(self, search):
