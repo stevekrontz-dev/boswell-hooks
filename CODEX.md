@@ -19,7 +19,9 @@ and subagent hooks but no `SessionEnd` event.
    matches are eligible, noisy content classes are excluded, and at most two
    memories are injected. Explicit Boswell search remains the broad-recall path.
 3. `PreToolUse` blocks material work without startup, blocks unsafe force pushes,
-   and requires a matching read before corrective Boswell commits.
+   rejects `apply_patch` deletion of files larger than 8 MiB before Codex can
+   embed their full contents in legacy transcript history, and requires a
+   matching read before corrective Boswell commits.
 4. `PostToolUse` maintains mutation, verification, and Boswell-read ledgers.
 5. `PreCompact` spools a checkpoint; `PostCompact` validates the durable startup
    cache without reinjecting stale orientation into model context.

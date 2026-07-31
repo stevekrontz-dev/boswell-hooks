@@ -38,6 +38,8 @@ FAILURE_RE = re.compile(r"exit code:\s*[1-9]|\b(failed|failure|traceback)\b", re
 READ_TOOL_RE = re.compile(r"boswell_(search|semantic_search|recall|fetch|head|log|brief|manifest)")
 MUTATION_TOOLS = {"apply_patch", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 MATERIAL_TOOLS = MUTATION_TOOLS | {"Bash", "shell_command"}
+APPLY_PATCH_DELETE_PREFIX = "*** Delete File: "
+MAX_APPLY_PATCH_DELETE_BYTES = 8 * 1024 * 1024
 
 # Temporary precision-first containment for prompt-time retrieval. The Atlas
 # Context Assembly plan owns the durable read path; this hook only suppresses
@@ -250,6 +252,33 @@ def _tool_input(data: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _oversized_apply_patch_deletes(data: dict) -> list[tuple[Path, int]]:
+    if _tool_name(data) != "apply_patch":
+        return []
+    command = _tool_input(data).get("command")
+    if not isinstance(command, str):
+        return []
+    cwd_value = data.get("cwd")
+    cwd = Path(cwd_value) if isinstance(cwd_value, str) and cwd_value else Path.cwd()
+    oversized = []
+    for line in command.splitlines():
+        if not line.startswith(APPLY_PATCH_DELETE_PREFIX):
+            continue
+        path_text = line[len(APPLY_PATCH_DELETE_PREFIX):]
+        if not path_text:
+            continue
+        try:
+            path = Path(path_text)
+            if not path.is_absolute():
+                path = cwd / path
+            size = path.stat().st_size
+        except (OSError, ValueError):
+            continue
+        if size > MAX_APPLY_PATCH_DELETE_BYTES:
+            oversized.append((path, size))
+    return oversized
+
+
 def _pre_tool(data: dict) -> dict | None:
     tool = _tool_name(data)
     sid = data.get("session_id")
@@ -260,6 +289,22 @@ def _pre_tool(data: dict) -> dict | None:
         return _deny(
             "Boswell startup continuity is incomplete for this session. "
             "Load continuity before acting."
+        )
+
+    oversized_deletes = _oversized_apply_patch_deletes(data)
+    if oversized_deletes:
+        rendered = ", ".join(
+            f"{path} ({size} bytes)"
+            for path, size in oversized_deletes[:3]
+        )
+        if len(oversized_deletes) > 3:
+            rendered += f", plus {len(oversized_deletes) - 3} more"
+        return _deny(
+            "Oversized apply_patch deletion blocked: Codex legacy transcripts embed "
+            "the entire deleted file body and can exhaust process memory. "
+            f"Blocked target(s): {rendered}. Verify the exact target, then use a "
+            "platform-native filesystem deletion that does not capture file content; "
+            "do not retry with apply_patch."
         )
 
     if tool in {"Bash", "shell_command"}:

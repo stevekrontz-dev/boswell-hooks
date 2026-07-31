@@ -277,6 +277,69 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(
             result["hookSpecificOutput"]["permissionDecision"], "deny")
 
+    def test_oversized_apply_patch_delete_is_blocked_before_file_read(self):
+        session_state.save_startup_cache("large-delete", self.startup_payload())
+        session_state.save("large-delete", {"startup_loaded": True})
+        target = Path(self.temp.name) / "large-generated.json"
+        target.write_bytes(b"x" * 32)
+
+        with mock.patch.object(dispatcher, "MAX_APPLY_PATCH_DELETE_BYTES", 16):
+            result = dispatcher._pre_tool({
+                "session_id": "large-delete",
+                "cwd": self.temp.name,
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": (
+                        "*** Begin Patch\n"
+                        "*** Delete File: large-generated.json\n"
+                        "*** End Patch\n"
+                    )
+                },
+            })
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"], "deny")
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("32 bytes", reason)
+        self.assertIn(str(target), reason)
+        self.assertTrue(target.is_file())
+
+    def test_small_apply_patch_delete_remains_allowed(self):
+        session_state.save_startup_cache("small-delete", self.startup_payload())
+        session_state.save("small-delete", {"startup_loaded": True})
+        target = Path(self.temp.name) / "small.txt"
+        target.write_bytes(b"small")
+
+        with mock.patch.object(dispatcher, "MAX_APPLY_PATCH_DELETE_BYTES", 16):
+            result = dispatcher._pre_tool({
+                "session_id": "small-delete",
+                "cwd": self.temp.name,
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": (
+                        "*** Begin Patch\n"
+                        "*** Delete File: small.txt\n"
+                        "*** End Patch\n"
+                    )
+                },
+            })
+
+        self.assertIsNone(result)
+        self.assertTrue(target.is_file())
+
+    def test_non_apply_patch_tools_do_not_trigger_large_delete_guard(self):
+        session_state.save_startup_cache("shell-delete", self.startup_payload())
+        session_state.save("shell-delete", {"startup_loaded": True})
+
+        result = dispatcher._pre_tool({
+            "session_id": "shell-delete",
+            "cwd": self.temp.name,
+            "tool_name": "shell_command",
+            "tool_input": {"command": "*** Delete File: large-generated.json"},
+        })
+
+        self.assertIsNone(result)
+
     def test_corrective_commit_requires_overlapping_read(self):
         session_state.save_startup_cache("s3", self.startup_payload())
         session_state.save("s3", {"startup_loaded": True, "boswell_read_tokens": []})
