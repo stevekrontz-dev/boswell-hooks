@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SessionStart",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SessionStart'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='SessionStart';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 30,
             "statusMessage": "Loading Boswell continuity"
           }
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" UserPromptSubmit",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','UserPromptSubmit'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='UserPromptSubmit';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 20,
             "statusMessage": "Retrieving relevant Boswell memories"
           }
@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PreToolUse",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PreToolUse'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PreToolUse';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10,
             "statusMessage": "Applying Boswell governance"
           }
@@ -48,7 +48,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PostToolUse",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PostToolUse'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PostToolUse';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PreCompact",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PreCompact'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PreCompact';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 15,
             "statusMessage": "Checkpointing continuity"
           }
@@ -75,7 +75,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PostCompact",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','PostCompact'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PostCompact';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -87,7 +87,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SubagentStart",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SubagentStart'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='SubagentStart';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -99,7 +99,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SubagentStop",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','SubagentStop'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='SubagentStop';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -111,7 +111,7 @@
           {
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" Stop",
-            "commandWindows": "python -c \"import os,runpy,sys;sys.argv=['codex_dispatcher.py','Stop'];runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex_dispatcher.py'),run_name='__main__')\"",
+            "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='Stop';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 15,
             "statusMessage": "Closing the Boswell loop"
           }
