@@ -1,0 +1,303 @@
+"""Read-Before-Code injector (boswell-hooks plugin).
+
+PreToolUse handler on the file-mutation tools (Edit / Write / MultiEdit /
+NotebookEdit). It does NOT block. When a mutation is about to land on a file the
+session has no Boswell evidence for, this hook runs the search ITSELF against
+/v2/search and returns the hits as `additionalContext`, then gets out of the way.
+
+WHY INJECTION AND NOT A REMINDER (Steve, 2026-08-04):
+  * A per-turn "remember to grok before coding" banner is precisely the thing
+    the tenant's STRUCTURAL-NOT-ASPIRATIONAL commitment forbids — "never
+    delegated to the model via context markers it will ignore." A fixed string
+    becomes wallpaper within a handful of turns and measurably changes nothing.
+  * A hard DENY taxes legitimate work and puts a permission prompt in front of
+    Steve, violating DONT-HAND-STEVE-CEREMONY (zero-cost-to-Steve guardrails).
+  * Carrying the memory into the window requires no cooperation from the model.
+    The stored state is simply present before the edit exists. That is the only
+    version of this that survives an agent which forgets to ask.
+
+The companion gates stay as they are: git_guard (irreversible pushes) and
+corrective_gate (read-before-WRITE on permanent memory) both DENY. This one is
+the read-before-CODE layer and it only ever adds context.
+
+Design constraints inherited from the plugin:
+  * Fail-open everywhere. A retrieval failure, a missing key, a dead network —
+    all return None (silent allow). Never break an edit on a hook bug.
+  * Evidence comes from readstate.py's existing per-session ledger. No new
+    bookkeeping substrate.
+  * At most ONE injection per (session, file). Re-editing the same file in a
+    session does not re-query; the context is already in the window.
+  * State lives machine-local under config.STATE_ROOT, never in the synced
+    plugin dir.
+"""
+import json
+import re
+import time
+from pathlib import Path
+
+try:
+    import readstate
+except Exception:  # pragma: no cover - never break the hook on an import
+    readstate = None
+
+try:
+    from config import STATE_ROOT
+except Exception:  # pragma: no cover
+    STATE_ROOT = Path.home() / ".claude" / "hooks" / "state"
+
+MUTATION_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+# Retrieval budget. hooks.json allows PreToolUse 10s; stay well inside it so a
+# slow Boswell can never be felt as editor latency.
+SEARCH_TIMEOUT = 6.0
+SEARCH_LIMIT = 5
+
+# Precision floor, mirroring the Codex-side automatic-context contract. Boswell
+# ranks the best available rows even when all are poor; rank alone is not
+# evidence worth spending context on.
+MAX_DISTANCE = 0.55
+MAX_RESULTS = 3
+# How deep a distance-less (BM25-only) row may sit and still be admitted.
+LEXICAL_TOP_N = 2
+CONTENT_CHARS = 700
+EXCLUDED_TYPES = {"credential", "sacred_manifest", "skill", "task", "transcript"}
+
+# Path noise that carries no project identity and would poison the query.
+_PATH_STOP = {
+    "users", "home", "steve", "projects", "src", "lib", "app", "scripts",
+    "node_modules", "dist", "build", "test", "tests", "temp", "tmp", "claude",
+    "documents", "desktop", "appdata", "local", "roaming", "python", "site",
+    "packages", "index", "main", "utils", "common", "config",
+}
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_HEXCHARS = frozenset("0123456789abcdef")
+
+
+def _is_hashy(tok):
+    """True for uuid/hash fragments, which are path noise that would poison the
+    query. Verified need (2026-08-04): a scratchpad path contributed
+    'bac2cd78', '97ea', '417e' from its session-id directory, consuming half
+    the term budget and turning the search into garbage.
+
+    Rule: all-hex AND contains a digit. The digit requirement spares ordinary
+    hex-letter words ('faced', 'added', 'decade') that carry real meaning,
+    while catching every uuid chunk regardless of length.
+    """
+    return bool(set(tok) <= _HEXCHARS and any(c.isdigit() for c in tok))
+
+MEMO_NAME = "read_before_code.json"
+
+
+def _memo_path():
+    return STATE_ROOT / "readstate" / MEMO_NAME
+
+
+def _load_memo():
+    try:
+        value = json.loads(_memo_path().read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember(session_id, target):
+    """Record that this (session, file) already got its injection. Best-effort:
+    a failed memo just means a possible duplicate injection later, never a
+    broken edit."""
+    try:
+        memo = _load_memo()
+        # Drop entries older than a day so the memo cannot grow without bound.
+        cutoff = time.time() - 86400
+        memo = {k: v for k, v in memo.items()
+                if isinstance(v, (int, float)) and v > cutoff}
+        memo[f"{session_id}::{target}"] = time.time()
+        path = _memo_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(memo), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def _already_injected(session_id, target):
+    return f"{session_id}::{target}" in _load_memo()
+
+
+def _target_path(tool_input):
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("file_path", "path", "notebook_path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _path_terms(target):
+    """Distinctive terms from a path: the file stem plus meaningful ancestors.
+
+    'C:/Users/Steve/plugins/boswell-hooks/scripts/git_guard.py'
+        -> ['git', 'guard', 'boswell', 'hooks', 'plugins']
+
+    Ancestors are walked NEAREST-FIRST: the directory immediately containing
+    the file describes it far better than the drive root does, and the term
+    budget is small enough that ordering decides what survives.
+    """
+    try:
+        p = Path(target)
+    except Exception:
+        return []
+    raw = [p.stem] + list(reversed(p.parent.parts))
+    terms = []
+    for chunk in raw:
+        for tok in _TOKEN_RE.findall(str(chunk)):
+            low = tok.lower()
+            if len(low) < 3 or low in _PATH_STOP or low.isdigit():
+                continue
+            if _is_hashy(low):
+                continue
+            if low not in terms:
+                terms.append(low)
+    return terms[:6]
+
+
+def _has_evidence(session_id, terms):
+    """True if this session already read something Boswell-side that overlaps
+    the file being touched. Reuses the corrective gate's ledger verbatim."""
+    if readstate is None or not terms:
+        return False
+    try:
+        had, read_tokens = readstate.recent_read_tokens(session_id)
+    except Exception:
+        return False
+    if not had:
+        return False
+    return bool({t for t in terms if len(t) >= 4} & read_tokens)
+
+
+def _slim(item, rank):
+    """Return a slim high-confidence row, or None to abstain.
+
+    /v2/search is hybrid RRF, and `distance` ONLY ships on rows that came
+    through the vector leg — a row matched purely by BM25 has no distance at
+    all (verified live 2026-08-04: the top hit for "boswell hooks dispatcher"
+    was lexical, distance=None, and was also the most relevant row returned).
+    Requiring a float distance therefore discards the best lexical hits and
+    quietly turns this whole hook into a no-op. Two admission rules:
+
+      * vector row  -> keep if distance is inside MAX_DISTANCE
+      * lexical row -> keep only at the very top of the ranking (BM25's first
+        couple of rows are strong signal; deeper ones are noise)
+
+    `branch` is deliberately not carried: the endpoint returns it as null on
+    every row, and a null field is just context noise (phantom-marker
+    discipline — reference only what actually ships).
+    """
+    if not isinstance(item, dict):
+        return None
+    if str(item.get("content_type") or "memory").lower() in EXCLUDED_TYPES:
+        return None
+
+    raw_distance = item.get("distance")
+    try:
+        distance = float(raw_distance)
+    except (TypeError, ValueError):
+        distance = None
+
+    if distance is not None:
+        if distance > MAX_DISTANCE:
+            return None
+        score = round(distance, 4)
+    else:
+        if rank >= LEXICAL_TOP_N:
+            return None
+        if item.get("rrf_score") is None and item.get("reranked_score") is None:
+            return None
+        score = "lexical"
+
+    return {
+        "message": item.get("message"),
+        "commit": str(item.get("commit_hash") or "")[:12],
+        "content_type": item.get("content_type"),
+        "match": score,
+        "content": str(item.get("content") or "")[:CONTENT_CHARS],
+    }
+
+
+def _context(text):
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": text,
+        }
+    }
+
+
+def evaluate(data):
+    """Return a PreToolUse additionalContext payload, or None. Never denies,
+    never raises."""
+    try:
+        if (data.get("tool_name") or "") not in MUTATION_TOOLS:
+            return None
+        target = _target_path(data.get("tool_input"))
+        if not target:
+            return None
+        session_id = data.get("session_id") or "nosession"
+        if _already_injected(session_id, target):
+            return None
+
+        terms = _path_terms(target)
+        if not terms:
+            return None
+        if _has_evidence(session_id, terms):
+            # The session already read Boswell on this subject. Nothing to add;
+            # memo it so we don't re-check on every subsequent edit.
+            _remember(session_id, target)
+            return None
+
+        try:
+            import boswell_client
+            response = boswell_client.search(
+                " ".join(terms), limit=SEARCH_LIMIT, timeout=SEARCH_TIMEOUT)
+        except Exception:
+            return None  # Boswell unreachable / unkeyed -> silent allow
+
+        rows = []
+        for rank, item in enumerate(response.get("results") or []):
+            row = _slim(item, rank)
+            if row is None:
+                continue
+            rows.append(row)
+            if len(rows) >= MAX_RESULTS:
+                break
+
+        # Memo regardless of hit count: a miss means Boswell holds nothing for
+        # this file, and re-querying on the next edit would buy nothing.
+        _remember(session_id, target)
+        if not rows:
+            return None
+
+        return _context(
+            "BOSWELL PRIOR STATE for " + Path(target).name + " — retrieved "
+            "automatically because this session had not read Boswell on this "
+            "subject before editing it. Reconcile your change against what is "
+            "already recorded here; if it contradicts one of these, say so "
+            "explicitly rather than silently overwriting the behavior:\n"
+            + json.dumps(rows, ensure_ascii=False, indent=1))
+    except Exception:
+        return None  # FAIL-OPEN
+
+
+if __name__ == "__main__":
+    # Offline self-test of the pure helpers (no network).
+    print("path term extraction:")
+    for sample in (
+        r"C:\Users\Steve\plugins\boswell-hooks\scripts\git_guard.py",
+        r"C:\Users\Steve\Projects\tintatlanta\crm\inbox.php",
+        "/home/steve/agents/foreman.py",
+    ):
+        print(f"  {sample}\n    -> {_path_terms(sample)}")
+    print("\ntool routing:")
+    for tn in ("Edit", "Write", "Read", "Bash", "NotebookEdit"):
+        print(f"  {tn:14s} -> {tn in MUTATION_TOOLS}")

@@ -14,7 +14,7 @@ class BoswellUnavailable(RuntimeError):
 
 
 def _request(method: str, path: str, *, params: dict | None = None,
-             payload: dict | None = None) -> dict:
+             payload: dict | None = None, timeout: float | None = None) -> dict:
     headers = {"Accept": "application/json", "User-Agent": "boswell-hooks/2.0 Codex"}
     headers.update(auth_headers())
     if not any(k in headers for k in ("X-API-Key", "X-Boswell-Internal", "Authorization")):
@@ -28,7 +28,8 @@ def _request(method: str, path: str, *, params: dict | None = None,
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+        with urllib.request.urlopen(
+                request, timeout=timeout or REQUEST_TIMEOUT) as response:
             raw = response.read().decode("utf-8", errors="replace")
             parsed = json.loads(raw) if raw else {}
             if not isinstance(parsed, dict):
@@ -46,10 +47,10 @@ def startup() -> dict:
     })
 
 
-def search(query: str, limit: int = 5) -> dict:
+def search(query: str, limit: int = 5, timeout: float | None = None) -> dict:
     return _request("GET", "/v2/search", params={
         "q": query[:2000], "limit": limit, "mode": "hybrid", "depth": "surface",
-    })
+    }, timeout=timeout)
 
 
 def commit(*, branch: str, content: dict, content_type: str,

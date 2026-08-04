@@ -83,11 +83,12 @@ def _post_tool(data):
 
 
 def _pre_tool(data):
-    # Emits a PreToolUse decision (deny/ask) on stdout. Two independent,
-    # mutually-exclusive guards: git_guard fires only on Bash `git push`,
-    # corrective_gate fires only on the Boswell commit tool. Each is fail-open
+    # Emits a PreToolUse decision (deny/ask) or an additionalContext injection
+    # on stdout. THREE independent, mutually-exclusive lanes: git_guard fires
+    # only on Bash `git push`, corrective_gate only on the Boswell commit tool,
+    # read_before_code only on the file-mutation tools. Each is fail-open
     # (returns None when not applicable / on error), so only one can ever
-    # produce a decision for a given call.
+    # produce output for a given call.
     #
     # corrective_gate + readstate were carried forward from the v1 plugin
     # (~/.claude/skills/boswell-hooks) on 2026-07-15. v2 shipped git_guard but
@@ -96,6 +97,16 @@ def _pre_tool(data):
     # working git_guard and no corrective gate. INSTALL.md advertises
     # "read-before-corrective-write governance", so v2 alone did not match its
     # own documentation. This merge is what both files claimed to be.
+    #
+    # read_before_code is a THIRD, non-overlapping lane (2026-08-04): it fires
+    # only on the file-mutation tools, which neither guard above matches, and it
+    # never denies — it injects the Boswell prior state for the file as
+    # additionalContext so the stored state is in the window before the edit
+    # exists. Steve's ask was "beaten in the head with grok before coding every
+    # turn"; a per-turn banner is the context-marker failure mode the sacred
+    # STRUCTURAL-NOT-ASPIRATIONAL commitment names, so this carries the data
+    # instead of the instruction. Ordered last: the two DENY gates get first
+    # refusal, and injection can never mask a block.
     result = None
     try:
         import git_guard
@@ -106,6 +117,12 @@ def _pre_tool(data):
         try:
             import corrective_gate
             result = corrective_gate.evaluate(data)
+        except Exception:
+            result = None
+    if result is None:
+        try:
+            import read_before_code
+            result = read_before_code.evaluate(data)
         except Exception:
             result = None
     if result:
