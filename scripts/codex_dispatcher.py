@@ -46,6 +46,8 @@ MAX_APPLY_PATCH_DELETE_BYTES = 8 * 1024 * 1024
 # obvious noise until that shadow path is ready.
 AUTO_CONTEXT_MAX_DISTANCE = 0.50
 AUTO_CONTEXT_MAX_RESULTS = 2
+# How deep a distance-less (BM25-only) row may sit and still be admitted.
+AUTO_CONTEXT_LEXICAL_TOP_N = 2
 AUTO_CONTEXT_CONTENT_CHARS = 600
 AUTO_CONTEXT_EXCLUDED_TYPES = {
     "agent_artifact", "credential", "sacred_manifest", "skill", "task", "transcript",
@@ -336,20 +338,34 @@ def _prompt_text(data: dict) -> str:
     return ""
 
 
-def _automatic_context_candidate(item: object) -> dict | None:
+def _automatic_context_candidate(item: object, rank: int = 0) -> dict | None:
     """Return a slim high-confidence candidate or abstain.
 
-    This deliberately requires an absolute semantic distance. General Boswell
-    search ranks the best available rows even when all are poor; rank alone is
-    not sufficient evidence for automatic context injection.
+    This deliberately requires an absolute semantic distance where one exists.
+    General Boswell search ranks the best available rows even when all are
+    poor; rank alone is not sufficient evidence for automatic context injection.
+
+    BUT /v2/search is hybrid RRF and `distance` ONLY ships on rows that came
+    through the vector leg — a row matched purely by BM25 carries `bm25_rank`
+    and no distance at all (verified live against the endpoint 2026-08-04).
+    Requiring a float therefore discarded every lexical hit, including top-
+    ranked ones: for the probe query "boswell hooks dispatcher" the single most
+    relevant row was lexical and was being silently dropped. Admit lexical rows
+    only at the very top of the ranking, where BM25 is strong signal.
     """
     if not isinstance(item, dict):
         return None
     try:
         distance = float(item.get("distance"))
     except (TypeError, ValueError):
-        return None
-    if distance > AUTO_CONTEXT_MAX_DISTANCE:
+        distance = None
+    if distance is None:
+        if rank >= AUTO_CONTEXT_LEXICAL_TOP_N:
+            return None
+        if item.get("rrf_score") is None and item.get("reranked_score") is None:
+            return None
+        distance = float(AUTO_CONTEXT_MAX_DISTANCE)  # nominal, for the slim row
+    elif distance > AUTO_CONTEXT_MAX_DISTANCE:
         return None
 
     content_type = str(item.get("content_type") or "memory").lower()
@@ -399,8 +415,8 @@ def _user_prompt(data: dict) -> dict | None:
     results = response.get("results") or []
     slim = []
     read_tokens = set(state.get("boswell_read_tokens") or [])
-    for item in results:
-        row = _automatic_context_candidate(item)
+    for rank, item in enumerate(results):
+        row = _automatic_context_candidate(item, rank)
         if row is None:
             continue
         slim.append(row)
