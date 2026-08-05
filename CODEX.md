@@ -14,7 +14,8 @@ and subagent hooks but no `SessionEnd` event.
    before the first response. Synthesized warm responses preserve the
    narrative, emotional/freshness, and decision/tension arcs directly. Legacy
    responses are compacted locally; status-less backlog rows are never offered
-   as available work.
+   as available work. A compact `startup_integrity` block distinguishes empty
+   evidence from failed sources and reports whether either compiler trimmed.
    Cached `startup` and `resume` deliveries are zero-output successes so Codex
    cannot replay the projection in bursts; `clear` reinjects the cached
    orientation because it creates a fresh model context.
