@@ -10,7 +10,11 @@ and subagent hooks but no `SessionEnd` event.
 ## Closed loop
 
 1. `SessionStart` calls `/v2/startup` once per `session_id`, caches the raw
-   response, and injects the governed projection before the first response.
+   response, and injects a governed projection capped at 8,000 characters
+   before the first response. Synthesized warm responses preserve the
+   narrative, emotional/freshness, and decision/tension arcs directly. Legacy
+   responses are compacted locally; status-less backlog rows are never offered
+   as available work.
    Cached `startup` and `resume` deliveries are zero-output successes so Codex
    cannot replay the projection in bursts; `clear` reinjects the cached
    orientation because it creates a fresh model context.

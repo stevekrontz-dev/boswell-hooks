@@ -39,6 +39,30 @@ class CodexHookTests(unittest.TestCase):
             "wren_bootloader": [],
         }
 
+    @staticmethod
+    def synthesized_startup_payload():
+        return {
+            "local_time": "now",
+            "sacred_manifest": {"identity": "Wren", "active_commitments": []},
+            "continuity": {
+                "narrative_thread": {
+                    "current_episode": {"status": "historical", "summary": "where we are"},
+                    "recent": [{"message": "what happened"}],
+                },
+                "emotional_trajectory": {
+                    "status": "unknown", "freshness": "stale",
+                    "reason": "do not infer current mood",
+                },
+                "key_decisions_and_tensions": {
+                    "recent_decisions": [{"message": "what was decided"}],
+                    "active_work": [{"title": "what is active", "status": "claimed"}],
+                    "blocked_work": [],
+                },
+            },
+            "retrieval": {"task_conditioned": "boswell_task_briefing"},
+            "verbosity": "warm",
+        }
+
     def test_hook_manifests_split_codex_and_claude_events(self):
         codex = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         claude = json.loads((ROOT / "claude" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
@@ -129,6 +153,47 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(session_state.load("s1")["startup_calls"], 1)
         self.assertIn("STRUCTURALLY LOADED", first["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(resumed, [None] * 8)
+
+    def test_synthesized_orientation_preserves_three_arcs_under_hook_budget(self):
+        payload = self.synthesized_startup_payload()
+        payload["continuity"]["narrative_thread"]["recent"] *= 100
+
+        orientation = dispatcher._orientation(payload)
+
+        self.assertLessEqual(len(orientation), dispatcher.ORIENTATION_MAX_CHARS)
+        self.assertIn('"narrative_thread"', orientation)
+        self.assertIn('"emotional_trajectory"', orientation)
+        self.assertIn('"key_decisions_and_tensions"', orientation)
+        self.assertIn('"sacred_manifest"', orientation)
+
+    def test_legacy_orientation_is_bounded_and_does_not_offer_ambiguous_tasks(self):
+        payload = self.startup_payload()
+        payload["sacred_manifest"]["identity"] = "Wren " + ("identity " * 400)
+        payload["recent_thread"] = [{"message": "recent " * 300}] * 8
+        payload["open_tasks"] = [
+            {"id": str(i), "title": "ambiguous " * 100, "priority": 1}
+            for i in range(20)
+        ]
+        payload["wren_bootloader"] = [{"message": "boot " * 300}] * 20
+
+        orientation = dispatcher._orientation(payload)
+
+        self.assertLessEqual(len(orientation), dispatcher.ORIENTATION_MAX_CHARS)
+        self.assertNotIn('"open_tasks"', orientation)
+        self.assertIn('"sacred_manifest"', orientation)
+
+    @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_irreducibly_oversized_manifest_fails_closed(self, startup, _flush):
+        payload = self.synthesized_startup_payload()
+        payload["sacred_manifest"]["identity"] = "x" * 20_000
+        startup.return_value = payload
+
+        result = dispatcher._session_start({"session_id": "oversized", "source": "startup"})
+
+        self.assertFalse(result["continue"])
+        self.assertIn("safety budget", result["stopReason"])
+        self.assertFalse(session_state.load("oversized")["startup_loaded"])
 
     @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
     @mock.patch.object(dispatcher.boswell_client, "startup")
