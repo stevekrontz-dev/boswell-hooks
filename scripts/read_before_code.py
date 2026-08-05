@@ -49,13 +49,25 @@ MUTATION_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 # Retrieval budget. hooks.json allows PreToolUse 10s; stay well inside it so a
 # slow Boswell can never be felt as editor latency.
-SEARCH_TIMEOUT = 6.0
-SEARCH_LIMIT = 5
+SEARCH_TIMEOUT = 8.0
+# Fetch DEEP, filter HARD. Measured 2026-08-04: for "does this computer match
+# the rest of the fleets boswell hooks versions", the correction that answers it
+# sits at rank 38 and the governing gate commit at rank 44 — both invisible at
+# any sane top-k. Boswell's ranking buries recent, on-topic rows under older
+# loosely-related ones, so a small window returns noise while the answer is two
+# pages down. The grounding gate is precise enough to sift a large candidate set
+# (it dropped 100% of the off-topic rows in testing), so the cheap correct move
+# is to widen the net and let grounding do the discriminating.
+SEARCH_LIMIT = 50
 
 # Precision floor, mirroring the Codex-side automatic-context contract. Boswell
 # ranks the best available rows even when all are poor; rank alone is not
 # evidence worth spending context on.
-MAX_DISTANCE = 0.55
+# Weak backstop only. Grounding (_grounded) is what decides relevance now; this
+# just rejects rows that are far by BOTH measures. Raised from 0.55 because the
+# measured distribution (0.51-0.73, median 0.63) made a tight cutoff reject
+# well-grounded rows for no reason.
+MAX_DISTANCE = 0.72
 MAX_RESULTS = 3
 # How deep a distance-less (BM25-only) row may sit and still be admitted.
 LEXICAL_TOP_N = 2
@@ -84,6 +96,20 @@ def _is_hashy(tok):
     while catching every uuid chunk regardless of length.
     """
     return bool(set(tok) <= _HEXCHARS and any(c.isdigit() for c in tok))
+
+# Grounding thresholds, CHOSEN BY MEASUREMENT not intuition (2026-08-04, swept
+# against 8 real prompts from Steve's own session):
+#   strong>=8 / overlap>=2 -> let a BIOGRAPHY row about an insurance gap through
+#                             on "is that the right method of action here?"
+#   strong>=8 / overlap>=3 -> killed that noise but went SILENT on "check all
+#                             the boswell hooks on this machine", the single
+#                             most valuable case in the set
+#   strong>=9 / overlap>=3 -> same loss
+#   strong>=7 / overlap>=3 -> kills the noise AND keeps the hooks case. Chosen.
+# Retune only by re-running that sweep; a threshold picked by feel is what got
+# the earlier distance filter wrong.
+GROUND_STRONG_LEN = 7
+GROUND_MIN_OVERLAP = 3
 
 MEMO_NAME = "read_before_code.json"
 
@@ -176,7 +202,108 @@ def _has_evidence(session_id, terms):
     return bool({t for t in terms if len(t) >= 4} & read_tokens)
 
 
-def _slim(item, rank):
+def _age(created_at):
+    """Human-readable age of a memory, e.g. '3d ago'. Returns 'unknown' rather
+    than raising on any unexpected format — an unparseable date must never cost
+    us the row, only the age annotation."""
+    try:
+        from datetime import datetime, timezone
+        raw = str(created_at or "").strip()
+        if not raw:
+            return "unknown"
+        raw = raw.replace("Z", "+00:00").replace(" ", "T", 1)
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs = (datetime.now(timezone.utc) - dt).total_seconds()
+        if secs < 0:
+            return "just now"
+        for div, unit in ((86400 * 365, "y"), (86400 * 30, "mo"),
+                          (86400, "d"), (3600, "h"), (60, "m")):
+            if secs >= div:
+                return "%d%s ago" % (int(secs // div), unit)
+        return "just now"
+    except Exception:
+        return "unknown"
+
+
+# Long-but-generic words. Grounding treats any token >=GROUND_STRONG_LEN as
+# distinctive enough to admit a row on its own, and length turns out to be a
+# poor proxy for that: "compare it to the home pcc" matched an Ollama adapter
+# test purely because both contained the word "compare" (7 chars). These carry
+# no entity identity, so they can never be the sole basis for a match. Kept
+# local to grounding — readstate._STOPWORDS is shared with corrective_gate and
+# is not mine to widen.
+# CAREFUL: "generic" means generic IN THIS TENANT, not in English. A first cut
+# of this list included machine/install/version/current/running and immediately
+# broke "check all the boswell hooks on this machine" — in Steve's domain a
+# machine is a fleet box, an install is a plugin deployment, and a version is
+# the thing the whole fleet audit turns on. Only words that can never name an
+# entity here belong below.
+_GENERIC_LONG = frozenset("""
+compare compared comparing between because before after should would could
+another through without already anything everything something nothing
+however therefore actually probably possible generally
+problem problems question questions example examples
+different difference against during specific specifically
+""".split())
+_TOKEN_MIN_DISTINCT = 4
+
+
+def _fold(tokens):
+    """Collapse trivial plurals so 'fleets' and 'fleet' compare equal. Only
+    touches tokens long enough that the trailing 's' is unlikely to be part of
+    the stem, and leaves '...ss' alone (class, process)."""
+    out = set()
+    for t in tokens:
+        if len(t) > 4 and t.endswith("s") and not t.endswith("ss"):
+            out.add(t[:-1])
+        else:
+            out.add(t)
+    return out
+
+
+def _grounded(query_tokens, item):
+    """Lexical grounding gate — the actual relevance test.
+
+    Measured 2026-08-04 against 13 real prompts / 60 returned rows: distances
+    ran 0.51-0.73 with a 0.63 median and NO gap between useful and useless
+    rows. A distance threshold there is a guess wearing a decimal point — at
+    0.55 it admitted 6% of rows, at 0.65 it admitted mostly noise. Proof it was
+    meaningless: asked "we have a supersession method in boswell right?", the
+    distance filter happily admitted a biography synthesis about Kenneth's ALS
+    and a v5 entity-extraction batch record.
+
+    Semantic distance says "these embeddings are near." It does not say "this
+    row is about the thing you asked." Overlap on distinctive terms does.
+
+    Same contract corrective_gate has used in production to decide whether a
+    read actually covered a fact: one strong (>=8 char) shared token, or two
+    significant ones. Reused rather than reinvented so both gates agree on what
+    "about the same thing" means.
+    """
+    if not query_tokens or readstate is None:
+        return True  # no basis to judge -> don't block on it
+    try:
+        row_tokens = readstate.tokenize(
+            str(item.get("message") or "") + " " + str(item.get("content") or "")[:2000])
+    except Exception:
+        return True
+    # Fold trivial plurals before comparing. Measured cost of not doing this:
+    # "does this computer match the rest of the FLEETS boswell hooks" failed to
+    # match a commit whose text says FLEET, and the gate went silent on exactly
+    # the question it had the answer to. Applied here only — readstate.tokenize
+    # is shared with corrective_gate and is not mine to loosen.
+    overlap = _fold(query_tokens) & _fold(row_tokens)
+    if not overlap:
+        return False
+    if any(len(t) >= GROUND_STRONG_LEN and t not in _GENERIC_LONG
+           for t in overlap):
+        return True
+    return len(overlap - _GENERIC_LONG) >= GROUND_MIN_OVERLAP
+
+
+def _slim(item, rank, query_tokens=None):
     """Return a slim high-confidence row, or None to abstain.
 
     /v2/search is hybrid RRF, and `distance` ONLY ships on rows that came
@@ -197,6 +324,10 @@ def _slim(item, rank):
     if not isinstance(item, dict):
         return None
     if str(item.get("content_type") or "memory").lower() in EXCLUDED_TYPES:
+        return None
+    # Grounding is checked BEFORE distance: it is the load-bearing filter now,
+    # and distance is demoted to a weak tiebreak that only rejects the truly far.
+    if not _grounded(query_tokens, item):
         return None
 
     raw_distance = item.get("distance")
@@ -221,6 +352,14 @@ def _slim(item, rank):
         "commit": str(item.get("commit_hash") or "")[:12],
         "content_type": item.get("content_type"),
         "match": score,
+        # created_at is carried DELIBERATELY (added 2026-08-04 after Steve
+        # asked). Every retrieved row is a claim frozen at a moment, and an
+        # undated claim reads as current fact. On 2026-08-04 retrieval ranked a
+        # 40-minute-old, already-corrected fleet audit at #1 with nothing in the
+        # payload to signal it was stale — the model had no way to discount it.
+        # A visible date is the cheapest possible staleness defence.
+        "recorded": str(item.get("created_at") or "")[:19] or "unknown",
+        "age": _age(item.get("created_at")),
         "content": str(item.get("content") or "")[:CONTENT_CHARS],
     }
 
@@ -264,8 +403,9 @@ def evaluate(data):
             return None  # Boswell unreachable / unkeyed -> silent allow
 
         rows = []
+        query_tokens = readstate.tokenize(" ".join(terms)) if readstate else set()
         for rank, item in enumerate(response.get("results") or []):
-            row = _slim(item, rank)
+            row = _slim(item, rank, query_tokens)
             if row is None:
                 continue
             rows.append(row)
