@@ -60,6 +60,12 @@ class CodexHookTests(unittest.TestCase):
                 },
             },
             "retrieval": {"task_conditioned": "boswell_task_briefing"},
+            "startup_integrity": {
+                "contract": "warm-continuity-v1",
+                "status": "ok",
+                "degraded_components": [],
+                "budget": {"status": "within_limit", "max_chars": 8000},
+            },
             "verbosity": "warm",
         }
 
@@ -156,7 +162,9 @@ class CodexHookTests(unittest.TestCase):
 
     def test_synthesized_orientation_preserves_three_arcs_under_hook_budget(self):
         payload = self.synthesized_startup_payload()
-        payload["continuity"]["narrative_thread"]["recent"] *= 100
+        payload["continuity"]["narrative_thread"]["recent"] = [
+            {"message": "narrative " * 200} for _ in range(100)
+        ]
 
         orientation = dispatcher._orientation(payload)
 
@@ -165,6 +173,12 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn('"emotional_trajectory"', orientation)
         self.assertIn('"key_decisions_and_tensions"', orientation)
         self.assertIn('"sacred_manifest"', orientation)
+        projected = json.loads(orientation.split("\n", 1)[1])
+        self.assertIn("startup_integrity", projected)
+        self.assertEqual(
+            projected["startup_integrity"]["hook_projection"]["status"],
+            "trimmed",
+        )
 
     def test_legacy_orientation_is_bounded_and_does_not_offer_ambiguous_tasks(self):
         payload = self.startup_payload()
@@ -181,6 +195,12 @@ class CodexHookTests(unittest.TestCase):
         self.assertLessEqual(len(orientation), dispatcher.ORIENTATION_MAX_CHARS)
         self.assertNotIn('"open_tasks"', orientation)
         self.assertIn('"sacred_manifest"', orientation)
+        projected = json.loads(orientation.split("\n", 1)[1])
+        self.assertEqual(projected["startup_integrity"]["status"], "degraded")
+        self.assertEqual(
+            projected["startup_integrity"]["degraded_components"][0]["reason"],
+            "legacy_payload",
+        )
 
     @mock.patch.object(dispatcher.transcript_spool, "flush_pending", return_value=(0, 0))
     @mock.patch.object(dispatcher.boswell_client, "startup")

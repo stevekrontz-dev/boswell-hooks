@@ -140,7 +140,7 @@ def _orientation(payload: dict) -> str:
             key: payload.get(key) for key in (
                 "local_time", "sacred_manifest", "continuity", "retrieval",
                 "retrieval_priming", "agent_id", "context_used",
-                "quarantine_alert", "hygiene_alert",
+                "quarantine_alert", "hygiene_alert", "startup_integrity",
             ) if payload.get(key) is not None
         }
     else:
@@ -188,6 +188,14 @@ def _orientation(payload: dict) -> str:
             "open_tasks": open_tasks,
             "expiring_bookmarks": (payload.get("expiring_bookmarks") or [])[:2],
             "wren_bootloader": bootloader,
+            "startup_integrity": {
+                "contract": "legacy-startup-projection-v1",
+                "status": "degraded",
+                "degraded_components": [{
+                    "component": "server_contract",
+                    "reason": "legacy_payload",
+                }],
+            },
         }
         projection = {
             key: value for key, value in projection.items()
@@ -197,6 +205,22 @@ def _orientation(payload: dict) -> str:
     # Detach nested references before the budget reducer mutates its projection;
     # the full raw response remains intact in the durable session cache.
     projection = json.loads(json.dumps(projection, ensure_ascii=False, default=str))
+    integrity = projection.get("startup_integrity")
+    if not isinstance(integrity, dict):
+        integrity = {
+            "contract": "hook-projection-v1",
+            "status": "degraded",
+            "degraded_components": [{
+                "component": "server_integrity",
+                "reason": "missing",
+            }],
+        }
+        projection["startup_integrity"] = integrity
+    integrity["hook_projection"] = {
+        "status": "within_limit",
+        "max_chars": ORIENTATION_MAX_CHARS,
+    }
+    hook_trimmed = False
 
     def render() -> str:
         return ORIENTATION_HEADER + "\n" + json.dumps(
@@ -224,15 +248,18 @@ def _orientation(payload: dict) -> str:
     for items, minimum in reducible:
         while isinstance(items, list) and len(items) > minimum and len(render()) > ORIENTATION_MAX_CHARS:
             items.pop()
+            hook_trimmed = True
 
     if len(render()) > ORIENTATION_MAX_CHARS:
         for key in ("retrieval_priming", "retrieval", "expiring_bookmarks",
                     "open_tasks", "wren_bootloader", "recent_thread"):
-            projection.pop(key, None)
+            if projection.pop(key, None) is not None:
+                hook_trimmed = True
 
     if len(render()) > ORIENTATION_MAX_CHARS:
         compact = {
-            key: projection.get(key) for key in ("local_time", "sacred_manifest", "agent_id")
+            key: projection.get(key) for key in (
+                "local_time", "sacred_manifest", "agent_id", "startup_integrity")
             if projection.get(key) is not None
         }
         if continuity:
@@ -246,6 +273,9 @@ def _orientation(payload: dict) -> str:
                 },
             }
         projection = compact
+        hook_trimmed = True
+    integrity["hook_projection"]["status"] = (
+        "trimmed" if hook_trimmed else "within_limit")
     rendered = render()
     if len(rendered) > ORIENTATION_MAX_CHARS:
         raise OrientationBudgetExceeded(
