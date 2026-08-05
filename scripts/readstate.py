@@ -185,6 +185,33 @@ def record(data):
         pass  # fail-open
 
 
+def record_tokens(session_id, source, text):
+    """Record a NON-tool Boswell read into the same ledger.
+
+    Added 2026-08-04 for prompt_retrieval.py: the per-turn hook performs a real
+    Boswell read on the model's behalf, so its results are genuine evidence and
+    must land in the ledger the gates consult. Without this, the per-turn hook
+    and read_before_code would each re-query the same subject, and
+    corrective_gate would ignore a read that demonstrably happened.
+
+    Same fail-open contract as record(): never raises.
+    """
+    try:
+        tokens = tokenize(text)
+        if not tokens:
+            return
+        entry = {
+            "ts": int(time.time()),
+            "tool": str(source or "hook"),
+            "tokens": sorted(tokens),
+        }
+        LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_ledger_path(session_id), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # fail-open
+
+
 def recent_read_tokens(session_id, recency_seconds=None):
     """Return (had_qualifying_read, union_of_tokens) for this session's ledger,
     restricted to entries within recency_seconds (0/None = whole session).

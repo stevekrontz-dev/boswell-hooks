@@ -53,14 +53,25 @@ def _session_start(data):
 
 
 def _user_prompt(data):
-    # Dormant: the CHECK_EXPIRING_PRIORITIES marker was dropped 2026-06-06.
-    # It asked the LLM to search for `priority_until`-expiring commits, but that
-    # field does not exist in the data model; the real expiring signal
-    # (expiring_bookmarks) already ships in the boswell_startup payload. The
-    # UserPromptSubmit hook registration was removed from hooks.json, so this
-    # handler is no longer invoked — kept (no-op) for one-line restore if a
-    # genuine per-prompt, data-backed nudge is wanted later.
-    return
+    # REVIVED 2026-08-04. History: this handler carried a
+    # CHECK_EXPIRING_PRIORITIES marker that asked the LLM to search for
+    # `priority_until`-expiring commits — a field that does not exist in the
+    # data model. The marker was dropped 2026-06-06 and the UserPromptSubmit
+    # registration was pulled with it, which left the Claude surface with ZERO
+    # per-turn Boswell contact for two months while Codex kept its retrieval.
+    #
+    # The replacement is deliberately NOT another marker. prompt_retrieval runs
+    # a real Boswell search on the prompt and injects the hits, so the model
+    # gets data it does not have rather than an instruction it will skim. That
+    # distinction is the whole point of the original 2026-06-06 removal, and of
+    # the STRUCTURAL-NOT-ASPIRATIONAL commitment.
+    try:
+        import prompt_retrieval
+        result = prompt_retrieval.evaluate(data)
+    except Exception:
+        result = None
+    if result:
+        sys.stdout.write(json.dumps(result))
 
 
 def _post_tool(data):
