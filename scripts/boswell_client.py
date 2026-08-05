@@ -10,7 +10,30 @@ from codex_config import AGENT_ID, API_BASE, REQUEST_TIMEOUT, auth_headers
 
 
 class BoswellUnavailable(RuntimeError):
-    pass
+    """Boswell could not be reached or did not answer usefully.
+
+    Carries `status` (int HTTP code) when the failure was an HTTP response, and
+    None when it was a transport/parse failure.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+class BoswellAuthRejected(BoswellUnavailable):
+    """The credential was REJECTED (401/403) — Boswell itself is healthy.
+
+    Deliberately a SUBCLASS: every existing `except BoswellUnavailable` handler
+    keeps catching this unchanged. Callers that care can branch on it.
+
+    WHY THIS EXISTS (2026-08-05): home revoked api_keys row 67fcf720 for a key
+    exposure, not knowing the same secret was this machine's hook credential.
+    Every hook then reported a flat "BOSWELL UNREACHABLE" and tripped sacred
+    BOSWELL-DOWN-STOP — so a dead credential presented as a dead substrate and
+    Steve was told Boswell was down while it served traffic at 3.8.46. The two
+    demand opposite responses: re-key vs full stop. Never conflate them again.
+    """
 
 
 def _request(method: str, path: str, *, params: dict | None = None,
@@ -18,7 +41,7 @@ def _request(method: str, path: str, *, params: dict | None = None,
     headers = {"Accept": "application/json", "User-Agent": "boswell-hooks/2.0 Codex"}
     headers.update(auth_headers())
     if not any(k in headers for k in ("X-API-Key", "X-Boswell-Internal", "Authorization")):
-        raise BoswellUnavailable("no machine-local Boswell credential is configured")
+        raise BoswellAuthRejected("no machine-local Boswell credential is configured")
     url = f"{API_BASE}{path}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -36,9 +59,14 @@ def _request(method: str, path: str, *, params: dict | None = None,
                 raise BoswellUnavailable("Boswell returned a non-object response")
             return parsed
     except urllib.error.HTTPError as exc:
-        raise BoswellUnavailable(f"Boswell HTTP {exc.code}") from None
+        if exc.code in (401, 403):
+            raise BoswellAuthRejected(
+                f"Boswell rejected this machine's credential (HTTP {exc.code})",
+                status=exc.code) from None
+        raise BoswellUnavailable(f"Boswell HTTP {exc.code}", status=exc.code) from None
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise BoswellUnavailable(f"Boswell transport failure: {type(exc).__name__}") from None
+        raise BoswellUnavailable(
+            f"Boswell transport failure: {type(exc).__name__}") from None
 
 
 def startup() -> dict:

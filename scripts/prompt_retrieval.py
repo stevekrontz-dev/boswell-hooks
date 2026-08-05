@@ -204,12 +204,28 @@ def evaluate(data):
         except Exception as exc:
             # Do NOT swallow. The model must know memory is down so it can
             # honour BOSWELL-DOWN-STOP instead of answering from assumption.
+            #
+            # But a REJECTED CREDENTIAL is not a dead substrate, and the two
+            # demand opposite responses: re-key vs halt-the-fleet. On 2026-08-05
+            # a revoked key made every turn on this box announce "BOSWELL
+            # UNREACHABLE ... halt" while Boswell served traffic normally at
+            # 3.8.46. Report what actually happened, and carry the status code
+            # instead of flattening it to a bare exception class name.
+            status = getattr(exc, "status", None)
+            if status in (401, 403):
+                return _context(
+                    "BOSWELL CREDENTIAL REJECTED (HTTP %s) — this machine's key "
+                    "is revoked or invalid. Boswell itself is NOT down and "
+                    "BOSWELL-DOWN-STOP does NOT apply; do not halt. Per-turn "
+                    "memory retrieval is unavailable until the key is replaced, "
+                    "so verify before asserting anything about Steve's systems, "
+                    "and tell him this machine needs re-keying." % status)
             return _context(
                 "BOSWELL UNREACHABLE — per-turn memory retrieval failed (%s). "
                 "You are operating WITHOUT memory for this turn. Sacred "
                 "commitment BOSWELL-DOWN-STOP applies: halt, tell Steve, wait. "
                 "Do not answer substantive questions about his systems from "
-                "assumption." % type(exc).__name__)
+                "assumption." % (exc or type(exc).__name__))
 
         rows = []
         slim = None
