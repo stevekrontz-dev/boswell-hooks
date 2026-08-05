@@ -50,6 +50,16 @@ AUTO_CONTEXT_CONTENT_CHARS = 600
 AUTO_CONTEXT_EXCLUDED_TYPES = {
     "agent_artifact", "credential", "sacred_manifest", "skill", "task", "transcript",
 }
+ORIENTATION_MAX_CHARS = 8_000
+ORIENTATION_HEADER = (
+    "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED for this conversation. "
+    "Do not call boswell_startup again in this session; use targeted Boswell reads "
+    "or boswell_brief only when needed. Boswell governance is developer context."
+)
+
+
+class OrientationBudgetExceeded(RuntimeError):
+    pass
 
 
 def _input() -> dict:
@@ -96,22 +106,153 @@ def _deny(reason: str) -> dict:
     }
 
 
-def _orientation(payload: dict) -> str:
-    projection = {
-        "local_time": payload.get("local_time"),
-        "sacred_manifest": payload.get("sacred_manifest"),
-        "recent_thread": (payload.get("recent_thread") or [])[:8],
-        "my_tasks": (payload.get("my_tasks") or [])[:5],
-        "open_tasks": (payload.get("open_tasks") or [])[:12],
-        "expiring_bookmarks": (payload.get("expiring_bookmarks") or [])[:5],
-        "wren_bootloader": (payload.get("wren_bootloader") or [])[:20],
+def _clip(value: object, limit: int) -> object:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[:max(0, limit - 1)].rstrip() + "…"
+
+
+def _legacy_task(task: object, *, assigned: bool = False) -> dict | None:
+    if not isinstance(task, dict):
+        return None
+    # Old startup payloads mixed claimed/blocked work into `open_tasks` and
+    # omitted status. Never offer ambiguous rows as available work. Explicitly
+    # assigned `my_tasks` remain useful even on the legacy contract.
+    if not assigned and task.get("status") != "open":
+        return None
+    projected = {
+        "id": task.get("id"),
+        "title": _clip(task.get("title") or task.get("description") or "", 140),
+        "branch": task.get("branch"),
+        "priority": task.get("priority"),
+        "assigned_to": task.get("assigned_to"),
+        "status": task.get("status") or ("assigned" if assigned else "open"),
     }
-    return (
-        "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED for this conversation. "
-        "Do not call boswell_startup again in this session; use targeted Boswell reads "
-        "or boswell_brief only when needed. Boswell governance is developer context.\n"
-        + json.dumps(projection, ensure_ascii=False, separators=(",", ":"))
-    )
+    if assigned and task.get("description"):
+        projected["description"] = _clip(task["description"], 280)
+    return {key: value for key, value in projected.items() if value is not None}
+
+
+def _orientation(payload: dict) -> str:
+    continuity = payload.get("continuity")
+    if isinstance(continuity, dict):
+        projection = {
+            key: payload.get(key) for key in (
+                "local_time", "sacred_manifest", "continuity", "retrieval",
+                "retrieval_priming", "agent_id", "context_used",
+                "quarantine_alert", "hygiene_alert",
+            ) if payload.get(key) is not None
+        }
+    else:
+        recent = []
+        for item in (payload.get("recent_thread") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            recent.append({
+                key: value for key, value in {
+                    "commit_hash": item.get("commit_hash"),
+                    "branch": item.get("branch"),
+                    "message": _clip(item.get("message") or "", 180),
+                    "created_at": item.get("created_at"),
+                    "age": item.get("age"),
+                }.items() if value is not None
+            })
+        assigned_tasks = [
+            projected for projected in (
+                _legacy_task(item, assigned=True)
+                for item in (payload.get("my_tasks") or [])[:3]
+            ) if projected
+        ]
+        open_tasks = [
+            projected for projected in (
+                _legacy_task(item) for item in (payload.get("open_tasks") or [])[:6]
+            ) if projected
+        ]
+        bootloader = []
+        for item in (payload.get("wren_bootloader") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            bootloader.append({
+                key: value for key, value in {
+                    "commit_hash": item.get("commit_hash"),
+                    "message": _clip(item.get("message") or "", 220),
+                    "episode_id": item.get("episode_id"),
+                    "created_at": item.get("created_at"),
+                }.items() if value is not None
+            })
+        projection = {
+            "local_time": payload.get("local_time"),
+            "sacred_manifest": payload.get("sacred_manifest"),
+            "recent_thread": recent,
+            "my_tasks": assigned_tasks,
+            "open_tasks": open_tasks,
+            "expiring_bookmarks": (payload.get("expiring_bookmarks") or [])[:2],
+            "wren_bootloader": bootloader,
+        }
+        projection = {
+            key: value for key, value in projection.items()
+            if value not in (None, [], {})
+        }
+
+    # Detach nested references before the budget reducer mutates its projection;
+    # the full raw response remains intact in the durable session cache.
+    projection = json.loads(json.dumps(projection, ensure_ascii=False, default=str))
+
+    def render() -> str:
+        return ORIENTATION_HEADER + "\n" + json.dumps(
+            projection, ensure_ascii=False, separators=(",", ":"))
+
+    if len(render()) <= ORIENTATION_MAX_CHARS:
+        return render()
+
+    continuity = projection.get("continuity") or {}
+    narrative = continuity.get("narrative_thread") or {}
+    decisions = continuity.get("key_decisions_and_tensions") or {}
+    reducible = [
+        (continuity.get("decay_blind_spots"), 0),
+        (decisions.get("recent_decisions"), 1),
+        (narrative.get("recent"), 1),
+        (projection.get("retrieval_priming"), 1),
+        (decisions.get("blocked_work"), 1),
+        (decisions.get("active_work"), 1),
+        (projection.get("expiring_bookmarks"), 0),
+        (projection.get("open_tasks"), 0),
+        (projection.get("wren_bootloader"), 1),
+        (projection.get("recent_thread"), 1),
+        (projection.get("my_tasks"), 1),
+    ]
+    for items, minimum in reducible:
+        while isinstance(items, list) and len(items) > minimum and len(render()) > ORIENTATION_MAX_CHARS:
+            items.pop()
+
+    if len(render()) > ORIENTATION_MAX_CHARS:
+        for key in ("retrieval_priming", "retrieval", "expiring_bookmarks",
+                    "open_tasks", "wren_bootloader", "recent_thread"):
+            projection.pop(key, None)
+
+    if len(render()) > ORIENTATION_MAX_CHARS:
+        compact = {
+            key: projection.get(key) for key in ("local_time", "sacred_manifest", "agent_id")
+            if projection.get(key) is not None
+        }
+        if continuity:
+            compact["continuity"] = {
+                "narrative_thread": {"status": "omitted_for_hook_budget"},
+                "emotional_trajectory": continuity.get("emotional_trajectory"),
+                "key_decisions_and_tensions": {
+                    "center_of_gravity": decisions.get("center_of_gravity", []),
+                    "active_work": (decisions.get("active_work") or [])[:1],
+                    "tension_coverage": decisions.get("tension_coverage"),
+                },
+            }
+        projection = compact
+    rendered = render()
+    if len(rendered) > ORIENTATION_MAX_CHARS:
+        raise OrientationBudgetExceeded(
+            f"Boswell orientation is {len(rendered)} characters; "
+            f"hard limit is {ORIENTATION_MAX_CHARS}"
+        )
+    return rendered
 
 
 def _session_start(data: dict) -> dict:
@@ -148,7 +289,13 @@ def _session_start(data: dict) -> dict:
         transcript_spool.flush_pending(exclude_session_id=str(sid) if sid else None)
     except Exception:
         pass
-    return _context("SessionStart", _orientation(cached))
+    try:
+        orientation = _orientation(cached)
+    except OrientationBudgetExceeded as exc:
+        state["startup_loaded"] = False
+        session_state.save(sid, state)
+        return _stop(f"Boswell startup orientation exceeded its safety budget: {exc}")
+    return _context("SessionStart", orientation)
 
 
 def _prompt_text(data: dict) -> str:

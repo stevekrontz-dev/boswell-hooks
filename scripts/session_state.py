@@ -47,7 +47,10 @@ def load(session_id: str | None) -> dict:
     # proof of continuity. Concurrent PostToolUse hooks can race while updating
     # the mutable JSON and drop unrelated keys; that must not permanently lock
     # an already-oriented session out of every material tool.
-    if not state.get("startup_loaded") and load_startup_cache(session_id) is not None:
+    # A missing flag can be recovered from the durable cache after a concurrent
+    # state-write race.  An explicit False is a safety verdict (for example, an
+    # over-budget orientation) and must not be silently promoted back to True.
+    if "startup_loaded" not in state and load_startup_cache(session_id) is not None:
         state["startup_loaded"] = True
     return state
 
