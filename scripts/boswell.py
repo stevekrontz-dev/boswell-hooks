@@ -100,15 +100,26 @@ def log(message):
 def session_start():
     save_state({"session_start": datetime.now().isoformat(), "actions": []})
     log("SESSION START")
+    # Legacy CLAUDE-SESSION-NOTES.md pointer removed 2026-08-06.
+    #
+    # The same removal was applied to the standalone ~/.boswell/boswell.py on
+    # 2026-07-09 (Steve: "change it") but never to this bundled copy, so every
+    # Claude Code session kept being told to read a file that was deprecated a
+    # month earlier: a stale scribe whose last real entry is May, which also
+    # carries plaintext credentials, and which duplicates project facts that
+    # Boswell is the sole source of truth for.
+    #
+    # Worse than useless — it displaced real context. A session opening with
+    # "READ THESE FOR CONTEXT" and no Boswell commits starts blind, then acts on
+    # a stale local file. That is exactly how the 2026-08-06 windshield work
+    # repeated an architecture mistake (c235f94) that Boswell had already
+    # recorded and corrected a month prior.
+    #
+    # CLAUDE.md is auto-injected by the harness; Boswell context comes from
+    # boswell_startup, which CLAUDE.md mandates as the first call.
     print(f"\n{'='*60}")
     print("BOSWELL ACTIVE - Session recording started")
-    print(f"Session notes: {NOTES_FILE}")
     print(f"{'='*60}\n")
-    print("READ THESE FOR CONTEXT:")
-    for f in (str(CLAUDE_MD_PATH), str(NOTES_FILE)):
-        if os.path.exists(f):
-            print(f"  - {f}")
-    print()
 
 
 def session_end(summary=None):
