@@ -405,6 +405,53 @@ def _grounded(query_tokens, item):
     return len(overlap - _GENERIC_LONG) >= GROUND_MIN_OVERLAP
 
 
+# A capture card is a session/chat index row: chat_id, transcript_hash,
+# turn_count, first_user_msg, and so on. Most carry real signal in their first
+# message and are worth surfacing. Some carry NOTHING — the conversation was
+# never recorded, so the row is pure metadata wearing a title.
+#
+# Measured 2026-08-07 over 250 rows from 5 queries: 4 capture cards, 3 of them
+# with an empty first message. Rare in the corpus — and expensive when it lands,
+# because MAX_RESULTS is 3, so one empty stub costs a third of everything the
+# model gets that turn.
+#
+# Independently flagged by the M5 instance the same day, unprompted, as the
+# single highest-value fix to retrieval: "a four-month-old chat stub titled
+# 'Morning greeting' with an empty first message. That's pure noise competing
+# for attention with the one relevant row." It was right, and it surfaced in
+# this session's own injections twice while the work was being done.
+#
+# These evade EXCLUDED_TYPES because they are stored as content_type 'memory',
+# not 'transcript'. Detection works on the RAW fragment, never json.loads:
+# search returns ~500 truncated chars, so the payload rarely parses — a first
+# attempt at this measurement used json.loads and found 1 card in 200 instead
+# of 4 in 250, undercounting by 4x for exactly that reason.
+_CARD_KEY_RE = re.compile(
+    r'"(chat_id|chat_url|transcript_hash|session_id|captured_at|turn_count'
+    r'|message_count)"')
+_CARD_FIRST_RE = re.compile(r'"(first_user_msg|first_prompt)"\s*:\s*"([^"]*)"')
+# Below this many characters, a first message is a placeholder, not a subject.
+CARD_MIN_BODY = 12
+
+
+def _is_empty_capture_card(item):
+    """True for a session/chat index row whose conversation body is empty."""
+    try:
+        content = item.get("content")
+        if not isinstance(content, str) or not content:
+            return False
+        if len(_CARD_KEY_RE.findall(content)) < 2:
+            return False  # not a capture card at all
+        match = _CARD_FIRST_RE.search(content)
+        if match is None:
+            # A card whose first-message field did not survive truncation.
+            # Do not guess — keep it and let grounding decide.
+            return False
+        return len(match.group(2).strip()) < CARD_MIN_BODY
+    except Exception:
+        return False
+
+
 def _content_truncated(item):
     """True when the row's `content` arrived cut off mid-JSON.
 
@@ -540,6 +587,11 @@ def _slim(item, rank, query_tokens=None):
     if not isinstance(item, dict):
         return None
     if str(item.get("content_type") or "memory").lower() in EXCLUDED_TYPES:
+        return None
+    # Relevance floor: an index row with no conversation in it is metadata
+    # wearing a title. Refuse before grounding, since its chat title can
+    # legitimately overlap the query and earn a slot it cannot pay for.
+    if _is_empty_capture_card(item):
         return None
     # Grounding is checked BEFORE distance: it is the load-bearing filter now,
     # and distance is demoted to a weak tiebreak that only rejects the truly far.
