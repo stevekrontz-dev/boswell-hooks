@@ -65,6 +65,13 @@ def run_checks():
     ok(not fires("python - <<'PY'\ngit push staging main\nPY"),
        "heredoc body is data, not a push  (caught live on first backtest)")
     ok(not fires("echo 'git push staging main' > n.txt"), "quoted mention is not a push")
+    # Caught live a SECOND time, on the commit that shipped this lane: a heredoc
+    # with a QUOTED delimiter whose body mentioned a push, and the real push
+    # after it. Quote-blanking used to erase <<'EOF' before heredoc detection.
+    ok(dm._remote_name(
+        'git commit -m "$(cat <<\'EOF\'\nran: git push staging main\nEOF\n)"'
+        ' && git push -q origin main') == "origin",
+       "quoted-delimiter heredoc: body ignored, the REAL push after it is found")
     ok(not fires("git push"), "implicit remote -> no target to look up")
     ok(not fires("git status"), "unrelated command quiet")
 

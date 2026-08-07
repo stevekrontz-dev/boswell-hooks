@@ -77,6 +77,8 @@ def run_checks():
     ok(fires("grep -r foo . 2>/dev/null") is True, "real suppression fires")
     ok(fires('grep "2>/dev/null" f.txt') is False, "quoted suppressor ignored")
     ok(fires("cat <<EOF\n2>/dev/null\nEOF") is False, "heredoc body ignored")
+    ok(fires("cat <<'EOF'\n2>/dev/null\nEOF") is False,
+       "QUOTED-delimiter heredoc body ignored (quote-blanking used to hide it)")
     ok(fires("rm -f x 2>/dev/null") is False, "writer ignored")
     ok(fires("find . -name x 2>/dev/null", out="hit") is False, "output present")
 

@@ -105,18 +105,48 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 _HEREDOC_RE = re.compile(r"<<-?\s*['\"]?[A-Za-z_][A-Za-z0-9_]*")
 
 
+# Introducer plus its delimiter word, so the matching terminator can be found.
+_HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _strip_heredocs(cmd):
+    """Remove heredoc BODIES, keeping the command text on either side.
+
+    ORDER MATTERS, and getting it wrong cost a live false positive on
+    2026-08-07: this used to run AFTER quote-blanking, and `<<'EOF'` carries
+    quotes. Blanking them first turns the introducer into `<<   `, which the
+    heredoc pattern no longer recognises, so the whole body stayed "visible" —
+    and a commit message that happened to contain the words `git push staging
+    main` was read as if it were the command being run. Heredocs are found on
+    the RAW text now, before anything is rewritten.
+
+    Bodies are excised rather than truncating the rest of the line, so a real
+    command AFTER the heredoc (`git commit -m "$(cat <<'EOF' ... EOF)" && git
+    push origin main`) is still seen. An unterminated heredoc drops the tail,
+    which is the safe direction.
+    """
+    out = cmd
+    for _ in range(8):                      # bounded; each pass removes one
+        start = _HEREDOC_START_RE.search(out)
+        if not start:
+            break
+        rest = out[start.end():]
+        term = re.search(r"^[ \t]*%s[ \t]*$" % re.escape(start.group(2)),
+                         rest, re.M)
+        if term is None:
+            out = out[:start.start()]
+            break
+        out = out[:start.start()] + " " + rest[term.end():]
+    return out
+
+
 def _shell_visible(cmd_low):
     """The part of the command the shell parses as syntax, not data.
 
-    Quoted spans become spaces (preserving token boundaries), and everything
-    from a heredoc introducer onward is dropped — real redirections appear
-    before it, the body after it is payload.
+    Heredoc bodies are excised first (see _strip_heredocs), then quoted spans
+    become spaces, preserving token boundaries.
     """
-    visible = _QUOTED_RE.sub(" ", cmd_low)
-    m = _HEREDOC_RE.search(visible)
-    if m:
-        visible = visible[:m.start()]
-    return visible
+    return _QUOTED_RE.sub(" ", _strip_heredocs(cmd_low))
 
 
 def _suppressors_in(cmd_low):
