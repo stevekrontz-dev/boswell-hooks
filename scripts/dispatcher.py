@@ -174,6 +174,17 @@ def _pre_tool(data):
         result = git_guard.evaluate(data)
     except Exception:
         result = None
+    # protected_paths is a FOURTH deny lane (2026-08-07). It spans both Bash and
+    # the mutation tools, because the incident that motivated it (M5 session
+    # a214e3fa) destroyed files through a SCRIPT — a mutation-tool guard never
+    # saw it. No-op unless the project ships a .boswell-protect file, so it
+    # costs nothing on installs that never opt in.
+    if result is None:
+        try:
+            import protected_paths
+            result = protected_paths.evaluate(data)
+        except Exception:
+            result = None
     if result is None:
         try:
             import corrective_gate
