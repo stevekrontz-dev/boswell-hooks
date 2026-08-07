@@ -144,6 +144,52 @@ def _has_evidence(target, read_tokens):
     return len(overlap) >= _MIN_OVERLAP
 
 
+# --- findability of the correction ------------------------------------------
+# A correction is only worth storing if it can be FOUND by the person about to
+# repeat the mistake. Measured 2026-08-06 over 7 documented failures: the
+# governing memory was retrievable for 5, but the four that never reached the
+# model were all written in the language of their FIX rather than the SYMPTOM
+# that should trigger them.
+#
+# The clearest case: c235f94 records "Security CTAs route to
+# /get-quote?service=security, NOT flat-glass-quote.php". Correct, precise, and
+# unfindable — it shares almost no vocabulary with "a customer called in and
+# said he couldnt book just a front windshield", which is the situation where
+# it needed to fire. It is absent from the top 50 for every query a session in
+# that situation would plausibly run, so no ranking or selection change can
+# recover it. The three that DID land ("dead man switch fired", "log tail
+# hasn't updated") all describe how the problem RECURS.
+#
+# So corrective writes must carry the words someone will use when they are
+# about to make the same mistake again. One structured field, checked
+# deterministically — not a prose convention that erodes.
+_SYMPTOM_KEYS = {
+    "symptom", "symptoms", "triggers_when", "recurs_as", "found_when",
+    "presents_as", "looks_like", "how_it_recurs", "surfaces_as",
+}
+# Long enough to be a real sentence about the symptom, short enough that an
+# honest one-liner passes. A stub ("n/a", "none") must not satisfy the gate.
+_SYMPTOM_MIN_CHARS = 25
+
+
+def _has_symptom(content_obj):
+    if not isinstance(content_obj, dict):
+        return False
+    for key, value in content_obj.items():
+        if str(key).lower() not in _SYMPTOM_KEYS:
+            continue
+        if isinstance(value, str):
+            if len(value.strip()) >= _SYMPTOM_MIN_CHARS:
+                return True
+        elif isinstance(value, (list, tuple)):
+            if sum(len(str(v).strip()) for v in value) >= _SYMPTOM_MIN_CHARS:
+                return True
+        elif isinstance(value, dict):
+            if sum(len(str(v).strip()) for v in value.values()) >= _SYMPTOM_MIN_CHARS:
+                return True
+    return False
+
+
 def _deny(reason):
     return {
         "hookSpecificOutput": {
@@ -170,7 +216,25 @@ def evaluate(data):
         target = _target_tokens(text)
 
         if had_read and _has_evidence(target, read_tokens):
-            return None  # the corrected fact was read this session — PASS
+            # The correction is grounded. Second question: will anyone ever
+            # find it? A correction nobody can retrieve is a correction that
+            # gets made again.
+            if content_obj is not None and not _has_symptom(content_obj):
+                return _deny(
+                    "Corrective write blocked: no symptom line. This correction "
+                    "is written in the language of its FIX, which is how "
+                    "corrections become unfindable — measured 2026-08-06, four "
+                    "of seven governing decisions never reached the session "
+                    "about to repeat them, and every one of the four had this "
+                    "shape. Add a field named one of: " +
+                    ", ".join(sorted(_SYMPTOM_KEYS)) +
+                    " — describing the SITUATION as it will look next time, in "
+                    "the words someone would actually type then, not the words "
+                    "of the fix. Example: not \"CTAs route to /get-quote\" but "
+                    "\"a customer cannot book <service> on its own and you are "
+                    "about to build a new page for it\". Then retry. "
+                    "(Findability Gate; corrective writes only.)")
+            return None  # grounded and findable — PASS
 
         hint = ", ".join(sorted((t for t in target if len(t) >= 5),
                                 key=len, reverse=True)[:4]) or "the fact"

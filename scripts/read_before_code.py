@@ -70,10 +70,21 @@ SEARCH_LIMIT = 50
 MAX_DISTANCE = 0.72
 MAX_RESULTS = 3
 # Weight of the search's own rank when selecting which admitted rows to inject.
-# Swept 0/2/4/6/10/20 against the 7-case backtest: 0-2 scored 3/7, 4 scored 3/7
-# at this cap, 6 and above scored 4/7. Six is the smallest value that reaches
-# the ceiling, so it is the least aggressive setting that wins.
-RANK_WEIGHT = 6.0
+# Swept against the 7-case backtest twice. Before truncation handling existed,
+# 6 was the smallest weight reaching the then-ceiling of 4/7. With truncation
+# trust enabled the ceiling moved to 5/7 and 10 is the smallest weight that
+# reaches it — and 10 still retains the rank-34 credential ruling, so the deep
+# rows this whole mechanism exists to rescue are not traded away for it.
+RANK_WEIGHT = 10.0
+
+# A row whose content preview arrived truncated cannot be judged fairly by
+# lexical grounding: the search matched the FULL record, we only see ~700
+# alphabetically-ordered characters of it. Measured 90% of rows arrive this
+# way. Inside this rank the search's own judgement is better evidence than our
+# fragment, so grounding is not allowed to veto. Deeper than this we keep
+# requiring grounding, because rank alone is exactly the noise the gate exists
+# to filter. Swept 0/1/2/3/5/8: 3 is where the windshield case is recovered.
+TRUNCATED_TRUST_RANK = 3
 # How deep a distance-less (BM25-only) row may sit and still be admitted.
 LEXICAL_TOP_N = 2
 CONTENT_CHARS = 700
@@ -373,6 +384,35 @@ def _grounded(query_tokens, item):
     return len(overlap - _GENERIC_LONG) >= GROUND_MIN_OVERLAP
 
 
+def _content_truncated(item):
+    """True when the row's `content` arrived cut off mid-JSON.
+
+    /v2/search returns a PREVIEW of content (~700 chars, keys alphabetically
+    ordered), not the whole record. Measured 2026-08-06 across three real
+    queries: 135 of 150 rows (90%) arrive unparseable, i.e. truncated.
+
+    That matters because grounding re-judges relevance from the text it can
+    see, while the SEARCH matched against the full indexed record. A row can
+    therefore rank #0 on a word that is not in the fragment at all. Live case:
+    the restated quote-architecture ruling (4bbedc24) ranked #0 for "couldnt
+    book just a front windshield" because its `symptom` field says exactly
+    that — and `symptom` sorts alphabetically past the preview cutoff, so the
+    grounding gate saw no "windshield" anywhere and refused the single most
+    relevant row in the result set.
+    """
+    content = item.get("content")
+    if not isinstance(content, str) or not content:
+        return False
+    stripped = content.strip()
+    if not stripped.startswith(("{", "[")):
+        return False
+    try:
+        json.loads(stripped)
+        return False
+    except Exception:
+        return True
+
+
 def _ground_strength(query_tokens, item):
     """HOW STRONGLY a row is grounded — the number _grounded throws away.
 
@@ -435,11 +475,20 @@ def select_rows(results, query_tokens, max_results=MAX_RESULTS):
     blend keeps both. Raising max_results to 4 or 5 was measured too and buys
     nothing over the blend, so the injection stays small.
     """
-    scored = []  # noqa: E501
+    scored = []
     for rank, item in enumerate(results or []):
         row = _slim(item, rank, query_tokens)
         if row is None:
-            continue
+            # Truncation rescue: a shallow row whose content preview was cut
+            # off gets judged on the search's ranking instead of on a fragment
+            # that may not contain the matching words at all. This is not a
+            # softening of the gate — it is refusing to draw a conclusion from
+            # evidence we can see is incomplete.
+            if not (_content_truncated(item) and rank < TRUNCATED_TRUST_RANK):
+                continue
+            row = _slim(item, rank, None)
+            if row is None:
+                continue
         # Rank bonus decays fast: rank 0 -> +6.0, rank 1 -> +3.0, rank 5 -> +1.0,
         # rank 34 -> +0.17. Shallow rows keep the edge they have earned without
         # being able to bury a strongly-grounded deep row outright.

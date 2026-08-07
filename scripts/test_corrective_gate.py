@@ -78,8 +78,26 @@ _record_read("case-b", "acme widget sku pricing",
 r = corrective_gate.evaluate(_commit(
     "case-b", "CORRECTION: supersedes prior — acme_widget_sku was wrong",
     {"wrong_fact": "SKU-4417", "right_fact": "SKU-9920",
-     "subject": "acme_widget_sku"}))
+     "subject": "acme_widget_sku",
+     # Carries a symptom line, so this still tests the EVIDENCE path rather
+     # than tripping the findability gate added 2026-08-06.
+     "symptom": "someone quotes acme_widget_sku and the SKU comes out wrong"}))
 _check("(b) corrective + overlapping read -> PASS", r is None, repr(r))
+
+# (b2) grounded correction with NO symptom line -> DENY (findability gate).
+# Same ledger and subject as (b); the only difference is the missing symptom.
+r = corrective_gate.evaluate(_commit(
+    "case-b", "CORRECTION: supersedes prior — acme_widget_sku was wrong",
+    {"wrong_fact": "SKU-4417", "right_fact": "SKU-9920",
+     "subject": "acme_widget_sku"}))
+_check("(b2) grounded but no symptom line -> DENY", _is_deny(r), repr(r))
+
+# (b3) a stub symptom must not satisfy the gate.
+r = corrective_gate.evaluate(_commit(
+    "case-b", "CORRECTION: supersedes prior — acme_widget_sku was wrong",
+    {"wrong_fact": "SKU-4417", "right_fact": "SKU-9920",
+     "subject": "acme_widget_sku", "symptom": "n/a"}))
+_check("(b3) stub symptom -> DENY", _is_deny(r), repr(r))
 
 # (c) net-new append, no read -> PASS
 r = corrective_gate.evaluate(_commit(
@@ -125,6 +143,16 @@ FIX_CONTENT = {
     "right_fact": "tintinstitute.com is not owned",
     "supersedes": "prior brand-architecture note",
     "naming_flag": "ownership",
+    # Added 2026-08-06: these fixtures exist to regression-test the READ
+    # evidence path, so they carry a symptom line and are not also gated on
+    # findability. The findability gate has its own cases, (b2) and (b3).
+    #
+    # Wording matters here. A first attempt used "which tint domains Steve
+    # owns", whose tokens collided with Fixture A's deliberately-generic ledger
+    # ("tint shops", "domains inventory") and pushed that fixture over the
+    # >=2-significant-token evidence bar, flipping its expected DENY to a PASS.
+    # Keep this line clear of every token in Fixture A's ledger.
+    "symptom": "you are about to assert brand ownership of a URL from memory",
 }
 
 # Fixture A — the canonical DENY: ledger has only startup + GENERIC searches
