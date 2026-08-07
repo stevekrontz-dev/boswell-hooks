@@ -172,6 +172,42 @@ _SYMPTOM_KEYS = {
 _SYMPTOM_MIN_CHARS = 25
 
 
+# An EXPLICIT correction — the only thing strong enough to justify demanding a
+# schema field.
+#
+# The prose markers above are deliberately loose because the READ gate they feed
+# is cheap to satisfy: a session that already read the fact passes without
+# noticing. Hanging a structural requirement off that same loose signal was a
+# mistake, measured 2026-08-06 before this ever left the machine:
+#
+#   "SHIPPED: the correct fix for the availability 500"   -> BLOCKED
+#   "Chose Postgres instead of SQLite for the new store"  -> BLOCKED
+#   "Angela no longer sends on Sundays"                   -> BLOCKED
+#
+# Nine of ten sampled net-new commits classified corrective on words like
+# "correct", "actually", "instead of", "no longer", and with the symptom gate
+# attached, four of four were refused outright. That is a routine-memory-write
+# outage, fleet-wide, from a hook meant to improve recall.
+#
+# So the symptom requirement fires ONLY on an unambiguous self-declared
+# correction: a content dict carrying a corrective KEY, or a message that opens
+# by announcing itself as one. Incidental prose never triggers it.
+_EXPLICIT_MSG_RE = re.compile(
+    r"^\s*(CORRECTION|CORRECTED|SUPERSEDES|SUPERSEDING|RETRACTION|ERRATA)\b"
+    r"|this (corrects|supersedes)\b"
+    r"|\bi was wrong\b"
+    r"|\bsupersedes commit\b",
+    re.IGNORECASE)
+
+
+def _explicitly_corrective(message, content_obj):
+    if isinstance(content_obj, dict):
+        for k in content_obj.keys():
+            if str(k).lower() in _CORRECTIVE_KEYS:
+                return True
+    return bool(message and _EXPLICIT_MSG_RE.search(message))
+
+
 def _has_symptom(content_obj):
     if not isinstance(content_obj, dict):
         return False
@@ -219,7 +255,13 @@ def evaluate(data):
             # The correction is grounded. Second question: will anyone ever
             # find it? A correction nobody can retrieve is a correction that
             # gets made again.
-            if content_obj is not None and not _has_symptom(content_obj):
+            message = ""
+            ti = data.get("tool_input")
+            if isinstance(ti, dict) and isinstance(ti.get("message"), str):
+                message = ti["message"]
+            if (content_obj is not None
+                    and _explicitly_corrective(message, content_obj)
+                    and not _has_symptom(content_obj)):
                 return _deny(
                     "Corrective write blocked: no symptom line. This correction "
                     "is written in the language of its FIX, which is how "

@@ -99,6 +99,36 @@ r = corrective_gate.evaluate(_commit(
      "subject": "acme_widget_sku", "symptom": "n/a"}))
 _check("(b3) stub symptom -> DENY", _is_deny(r), repr(r))
 
+# (b4)-(b8) REGRESSION, 2026-08-06: net-new commits whose prose innocently
+# contains a marker word must NOT be dragged into the symptom requirement.
+# Measured before this guard existed: 9 of 10 sampled net-new messages
+# classified corrective on words like "correct"/"actually"/"instead of"/"no
+# longer", and 4 of 4 were then refused outright — a routine-memory-write
+# outage, fleet-wide, from a hook meant to improve recall. The symptom
+# requirement now keys off an EXPLICIT self-declared correction only.
+for _msg, _content in [
+    ("SHIPPED: the correct fix for the availability 500", {"what": "availability"}),
+    ("Chose Postgres instead of SQLite for the new store", {"decision": "postgres"}),
+    ("Angela no longer sends on Sundays", {"angela": "sunday off"}),
+    ("Research: customers previously stated they wanted darker tint", {"n": "note"}),
+    ("Steve was wrong about the cab tiers", {"n": "note"}),
+]:
+    _check("(b4+) incidental marker prose is NOT explicitly corrective: "
+           + _msg[:38],
+           corrective_gate._explicitly_corrective(_msg, _content) is False,
+           _msg)
+
+# The inverse: an explicit self-declared correction MUST still be caught.
+for _msg, _content in [
+    ("CORRECTION: supersedes prior", {"n": "note"}),
+    ("This supersedes commit 2d6e7c6f", {"n": "note"}),
+    ("ERRATA: hours were misstated", {"n": "note"}),
+    ("plain note", {"wrong_fact": "a", "right_fact": "b"}),
+]:
+    _check("(b9+) explicit correction IS caught: " + _msg[:38],
+           corrective_gate._explicitly_corrective(_msg, _content) is True,
+           _msg)
+
 # (c) net-new append, no read -> PASS
 r = corrective_gate.evaluate(_commit(
     "case-c", "SHIPPED: new dashboard v2 went live on atlas",
