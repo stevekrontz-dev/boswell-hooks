@@ -5,8 +5,22 @@ Invoked through the Claude hook catalog's `python`/`python3` launcher fallback.
 
 Reads the hook JSON from stdin ONCE and routes to in-process handlers (one
 Python process per event instead of one per command). Every handler is wrapped
-fail-open: a handler that raises must never break the session. Only the
-PreToolUse and Stop handlers may emit decision JSON on stdout.
+fail-open: a handler that raises must never break the session.
+
+WHICH EVENTS MAY WRITE TO STDOUT (re-verified against the harness 2026-08-06,
+not inherited):
+  * PreToolUse  — decision JSON (deny/ask) and/or additionalContext.
+  * Stop        — decision JSON. The done-gate.
+  * UserPromptSubmit — additionalContext. Live since 2026-08-04.
+  * PostToolUse — additionalContext. Live-verified 2026-08-06.
+
+This block used to read "Only the PreToolUse and Stop handlers may emit". That
+was true when it was written in June and silently stopped being true when
+prompt_retrieval started injecting on UserPromptSubmit; nobody re-checked it, so
+it sat here as a false constraint that would have talked the next author out of
+a working mechanism. Steve, 2026-08-06: "the first run at a contract may be
+stale due to progression." Verify this list against the harness before trusting
+it — do not inherit it either.
 
 All handler state lives machine-local under ~ (see each module), never inside
 this synced plugin directory.
@@ -91,6 +105,18 @@ def _post_tool(data):
     # corrective write — the gate would exist but never fire.
     import readstate
     _safe(readstate.record, data)
+    # PostToolUse may also return additionalContext. The "only PreToolUse and
+    # Stop may emit" line in this module's docstring is a June artifact that
+    # UserPromptSubmit already disproved when prompt_retrieval began injecting
+    # on 2026-08-04; it was never re-checked against the harness. Verified
+    # 2026-08-06 rather than inherited.
+    try:
+        import empty_result
+        result = empty_result.evaluate(data)
+    except Exception:
+        result = None
+    if result:
+        sys.stdout.write(json.dumps(result))
 
 
 def _pre_tool(data):
