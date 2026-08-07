@@ -91,8 +91,37 @@ def _failed(data):
     return False
 
 
+# A suppressor only counts as SUPPRESSION when the shell would read it as
+# redirection. Measured 2026-08-06, two false positives:
+#
+#   grep "2>/dev/null" notes.txt        <- it is the SEARCH STRING
+#   cat <<EOF ... 2>/dev/null ... EOF   <- it is heredoc DATA
+#
+# Both returned empty and both fired, telling the model its perfectly sound
+# command was an unreliable unknown. A guard that cries wolf on ordinary greps
+# is noise, and noise is how a guard stops being read at all — the exact failure
+# this hook exists to avoid.
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _shell_visible(cmd_low):
+    """The part of the command the shell parses as syntax, not data.
+
+    Quoted spans become spaces (preserving token boundaries), and everything
+    from a heredoc introducer onward is dropped — real redirections appear
+    before it, the body after it is payload.
+    """
+    visible = _QUOTED_RE.sub(" ", cmd_low)
+    m = _HEREDOC_RE.search(visible)
+    if m:
+        visible = visible[:m.start()]
+    return visible
+
+
 def _suppressors_in(cmd_low):
-    return [s for s in _SUPPRESSORS if s in cmd_low]
+    visible = _shell_visible(cmd_low)
+    return [s for s in _SUPPRESSORS if s in visible]
 
 
 def _is_query(cmd_low):

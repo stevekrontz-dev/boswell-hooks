@@ -85,6 +85,14 @@ RANK_WEIGHT = 10.0
 # requiring grounding, because rank alone is exactly the noise the gate exists
 # to filter. Swept 0/1/2/3/5/8: 3 is where the windshield case is recovered.
 TRUNCATED_TRUST_RANK = 3
+
+# Upper bound on directory entries examined when listing a new file's peers.
+# 4,000 costs ~180 ms; the whole point is to stay far under the 2s of headroom
+# the 10s PreToolUse budget leaves after SEARCH_TIMEOUT. Normal source
+# directories are orders of magnitude smaller, so this only ever bites on
+# upload/spool/node_modules-shaped directories, where a partial sample is still
+# useful and a killed hook is not.
+MAX_SIBLING_SCAN = 4000
 # How deep a distance-less (BM25-only) row may sit and still be admitted.
 LEXICAL_TOP_N = 2
 CONTENT_CHARS = 700
@@ -242,7 +250,20 @@ def _sibling_names(target, limit=24):
         p = Path(target)
         parent, stem, suffix = p.parent, p.stem.lower(), p.suffix.lower()
         names = []
+        scanned = 0
+        capped = False
         for entry in parent.iterdir():
+            # BOUNDED SCAN. Measured 2026-08-06: ~44 ms per 1,000 entries, so a
+            # 50,000-entry directory costs ~2.2s — and SEARCH_TIMEOUT already
+            # reserves 8s of the 10s PreToolUse budget in hooks.json, so the
+            # hook would be KILLED mid-flight and the edit would proceed with no
+            # context at all. Directories that size are real (uploads,
+            # transcript spools, node_modules). Only 24 peers are ever shown, so
+            # scanning the whole tree buys nothing worth a timeout.
+            scanned += 1
+            if scanned > MAX_SIBLING_SCAN:
+                capped = True
+                break
             # SAME EXTENSION ONLY. The peers of a new .php page are the other
             # .php pages, not .htaccess/.md/.json sitting in the same folder.
             # Mixing them yields exactly the noise measured on the first pass
@@ -266,7 +287,7 @@ def _sibling_names(target, limit=24):
         return (0 if (toks & target_tokens) else 1, name.lower())
 
     names.sort(key=_rank)
-    return names[:limit], max(0, len(names) - limit)
+    return names[:limit], max(0, len(names) - limit), capped
 
 
 def _has_evidence(session_id, terms):
@@ -630,7 +651,7 @@ def evaluate(data):
         if creating:
             # The peer list is the load-bearing part and it does NOT depend on
             # retrieval succeeding, so this branch fires even with zero rows.
-            peers, extra = _sibling_names(target)
+            peers, extra, peers_capped = _sibling_names(target)
             parts = ["You are about to CREATE " + Path(target).name
                      + ", which does not exist yet. Creating a file is an "
                      "architectural act: the question is not what you know "
@@ -640,6 +661,8 @@ def evaluate(data):
                 listing = ", ".join(peers)
                 if extra:
                     listing += ", +%d more" % extra
+                if peers_capped:
+                    listing += " (large directory — listing is a partial sample)"
                 parts.append(
                     "EXISTING " + (Path(target).suffix or "file")
                     + " FILES IN THAT SAME DIRECTORY: " + listing

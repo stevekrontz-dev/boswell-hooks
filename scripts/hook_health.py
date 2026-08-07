@@ -41,70 +41,92 @@ try:
 except Exception:  # pragma: no cover
     STATE_ROOT = Path.home() / ".claude" / "hooks" / "state"
 
-STATE_NAME = "hook_health.json"
+STATE_NAME = "hook_health.jsonl"
 REPORT_WINDOW_DAYS = 7
 MAX_ERR_CHARS = 240
+# Read bound — aggregation only needs recent lines, and an unbounded read would
+# make the watcher itself the latency.
+MAX_LINES = 4000
+# Rewrite threshold. Pruning happens in report(), never on the append path.
+MAX_BYTES = 512 * 1024
 
 
 def _path():
     return STATE_ROOT / STATE_NAME
 
 
-def _load():
+def _read():
+    """Recent ledger lines. A torn line is skipped, never fatal."""
     try:
-        value = json.loads(_path().read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
+        with open(_path(), "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[-MAX_LINES:]
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("h"):
+            rows.append(row)
+    return rows
 
 
-def _save(state):
+def _prune():
+    """Keep the ledger bounded. Called only from report()."""
     try:
         path = _path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state), encoding="utf-8")
+        if not path.exists() or path.stat().st_size <= MAX_BYTES:
+            return
+        keep = _read()[-(MAX_LINES // 2):]
+        tmp = path.with_suffix(".jsonl.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for row in keep:
+                fh.write(json.dumps(row) + "\n")
         tmp.replace(path)
+    except Exception:
+        pass
+
+
+def _append(handler, ok, detail=None):
+    """One append. NO read-modify-write.
+
+    Measured 2026-08-06 with 8 concurrent writers: the previous
+    load-mutate-save lost 318 of 320 updates and left only 2 of 8 handlers in
+    the ledger. Worse than the lost counts, a concurrent writer could ERASE an
+    error another handler had just recorded — the watcher silently dropping the
+    exact evidence it exists to preserve, which is the b003a5c1 failure class
+    reproduced inside the thing built to detect it.
+
+    Small appends do not interleave that way, and this is the pattern
+    readstate.py already uses for its per-session ledger. Reused rather than
+    reinvented, and no locking to get wrong per-platform.
+
+    Coerce the handler name: a non-string survives dict access but serialises
+    to a bogus key nothing can later clear.
+    """
+    try:
+        entry = {"h": str(handler or "unknown"), "ok": bool(ok),
+                 "t": time.time()}
+        if detail:
+            entry["e"] = str(detail)[:MAX_ERR_CHARS]
+        path = _path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
     except Exception:
         pass
 
 
 def note_error(handler, exc):
     """Record that a fail-open handler swallowed an exception."""
-    try:
-        # Coerce: a non-string key survives dict access but serialises to a
-        # bogus JSON key ("null"), producing a ledger entry nothing can clear.
-        handler = str(handler or "unknown")
-        state = _load()
-        entry = state.get(handler)
-        if not isinstance(entry, dict):
-            entry = {}
-        entry["errors"] = int(entry.get("errors", 0)) + 1
-        entry["last_error_at"] = time.time()
-        detail = "%s: %s" % (type(exc).__name__, exc)
-        entry["last_error"] = detail[:MAX_ERR_CHARS]
-        state[handler] = entry
-        _save(state)
-    except Exception:
-        pass
+    _append(handler, False, "%s: %s" % (type(exc).__name__, exc))
 
 
 def note_ok(handler):
     """Record a clean run, so a recovered handler stops being reported."""
-    try:
-        # Coerce: a non-string key survives dict access but serialises to a
-        # bogus JSON key ("null"), producing a ledger entry nothing can clear.
-        handler = str(handler or "unknown")
-        state = _load()
-        entry = state.get(handler)
-        if not isinstance(entry, dict):
-            entry = {}
-        entry["ok"] = int(entry.get("ok", 0)) + 1
-        entry["last_ok_at"] = time.time()
-        state[handler] = entry
-        _save(state)
-    except Exception:
-        pass
+    _append(handler, True)
 
 
 def report():
@@ -115,21 +137,31 @@ def report():
     not a problem worth spending session context on.
     """
     try:
-        state = _load()
+        _prune()
+        agg = {}
+        for row in _read():
+            entry = agg.setdefault(str(row.get("h")), {
+                "errors": 0, "last_err": 0.0, "last_ok": 0.0, "detail": "?"})
+            stamp = float(row.get("t") or 0)
+            if row.get("ok"):
+                entry["last_ok"] = max(entry["last_ok"], stamp)
+            else:
+                entry["errors"] += 1
+                if stamp >= entry["last_err"]:
+                    entry["last_err"] = stamp
+                    entry["detail"] = row.get("e") or "?"
+
         cutoff = time.time() - (REPORT_WINDOW_DAYS * 86400)
         broken = []
-        for handler, entry in sorted(state.items()):
-            if not isinstance(entry, dict):
-                continue
-            last_err = entry.get("last_error_at") or 0
+        for handler, entry in sorted(agg.items()):
+            last_err = entry["last_err"]
             if last_err < cutoff:
                 continue
-            if (entry.get("last_ok_at") or 0) >= last_err:
+            if entry["last_ok"] >= last_err:
                 continue  # recovered
             age_h = max(0, int((time.time() - last_err) / 3600))
             broken.append("  - %s: %d error(s), last %dh ago -> %s"
-                          % (handler, int(entry.get("errors", 0)), age_h,
-                             entry.get("last_error", "?")))
+                          % (handler, entry["errors"], age_h, entry["detail"]))
         if not broken:
             return None
         return ("BOSWELL HOOK HEALTH — these handlers are failing open, which "
