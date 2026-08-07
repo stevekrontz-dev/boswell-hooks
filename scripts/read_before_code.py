@@ -188,6 +188,71 @@ def _path_terms(target):
     return terms[:6]
 
 
+def _is_creation(data, target):
+    """True when this call CREATES a file rather than editing one.
+
+    Write is the only mutation tool that can bring a file into existence, and
+    the harness refuses a Write over an unread existing file, so "Write + not
+    on disk" is a reliable creation signal.
+    """
+    if (data.get("tool_name") or "") != "Write":
+        return False
+    try:
+        return not Path(target).exists()
+    except Exception:
+        return False
+
+
+def _sibling_names(target, limit=24):
+    """The files that ALREADY live beside the target, same extension.
+
+    This is injected as DATA, not folded into the search query. Measured
+    2026-08-06: widening the Boswell query with sibling-derived TERMS does not
+    work. The ruling that should have stopped windshield-tint.php (c235f94,
+    "why did you build a whole page to do the same exact thing the quote system
+    does") does not appear in the top 50 for ANY path-derived query — it shares
+    almost no vocabulary with "windshield tint". Retrieval cannot be relied on
+    to answer "does this already exist"; the directory listing can, and it is
+    always correct.
+
+    A model about to create windshield-tint.php next to get-quote.php,
+    film-removal.php, flat-glass-quote.php and protection.php does not need to
+    be told to think architecturally. It needs to be shown the four files it is
+    about to duplicate. That is a fact it does not have, cheaply obtained.
+
+    Cheap: one listdir, no recursion.
+    """
+    try:
+        p = Path(target)
+        parent, stem, suffix = p.parent, p.stem.lower(), p.suffix.lower()
+        names = []
+        for entry in parent.iterdir():
+            # SAME EXTENSION ONLY. The peers of a new .php page are the other
+            # .php pages, not .htaccess/.md/.json sitting in the same folder.
+            # Mixing them yields exactly the noise measured on the first pass
+            # ('htaccess', 'gmail', 'notes') and buries the real convention.
+            if entry.suffix.lower() != suffix:
+                continue
+            if not entry.is_file() or entry.stem.lower() == stem:
+                continue
+            names.append(entry.stem)
+    except Exception:
+        return []
+
+    # Peers that share a word with the new file are the ones most likely to
+    # already own the job, so they must survive truncation. Alphabetical order
+    # alone pushed protection.php and windshield-protection.php into "+13 more"
+    # for a windshield quote page — the two files most worth looking at.
+    target_tokens = {t.lower() for t in _TOKEN_RE.findall(stem) if len(t) >= 4}
+
+    def _rank(name):
+        toks = {t.lower() for t in _TOKEN_RE.findall(name) if len(t) >= 4}
+        return (0 if (toks & target_tokens) else 1, name.lower())
+
+    names.sort(key=_rank)
+    return names[:limit], max(0, len(names) - limit)
+
+
 def _has_evidence(session_id, terms):
     """True if this session already read something Boswell-side that overlaps
     the file being touched. Reuses the corrective gate's ledger verbatim."""
@@ -389,21 +454,44 @@ def evaluate(data):
         terms = _path_terms(target)
         if not terms:
             return None
-        if _has_evidence(session_id, terms):
+
+        # CREATING a file is a different act from editing one, and until
+        # 2026-08-06 this hook could not tell them apart.
+        #
+        # Editing asks "what do I already know about this file". Topical
+        # evidence answers that, so the shortcut below is right for edits.
+        # Creating asks "should this exist, and does this codebase already have
+        # a way to do it" — a question no amount of reading about the SUBJECT
+        # can answer, because the answer lives in the codebase's conventions.
+        #
+        # Measured failure (session 615d701f): a dozen Boswell searches on
+        # "windshield"/"tint" satisfied _has_evidence, so the creation of a new
+        # top-level windshield-tint.php was memo'd SILENTLY. Boswell already
+        # held the ruling (c235f94, "why did you build a whole page to do the
+        # same exact thing the quote system does") and the model never saw it.
+        # The page was built, reviewed by Steve, and thrown away.
+        #
+        # So on a creation: topical evidence does not license a new surface,
+        # and the query is widened with the neighbours that define what this
+        # directory already is.
+        creating = _is_creation(data, target)
+        if not creating and _has_evidence(session_id, terms):
             # The session already read Boswell on this subject. Nothing to add;
             # memo it so we don't re-check on every subsequent edit.
             _remember(session_id, target)
             return None
 
+        query_terms = list(terms)
+
         try:
             import boswell_client
             response = boswell_client.search(
-                " ".join(terms), limit=SEARCH_LIMIT, timeout=SEARCH_TIMEOUT)
+                " ".join(query_terms), limit=SEARCH_LIMIT, timeout=SEARCH_TIMEOUT)
         except Exception:
             return None  # Boswell unreachable / unkeyed -> silent allow
 
         rows = []
-        query_tokens = readstate.tokenize(" ".join(terms)) if readstate else set()
+        query_tokens = readstate.tokenize(" ".join(query_terms)) if readstate else set()
         for rank, item in enumerate(response.get("results") or []):
             row = _slim(item, rank, query_tokens)
             if row is None:
@@ -415,6 +503,36 @@ def evaluate(data):
         # Memo regardless of hit count: a miss means Boswell holds nothing for
         # this file, and re-querying on the next edit would buy nothing.
         _remember(session_id, target)
+
+        if creating:
+            # The peer list is the load-bearing part and it does NOT depend on
+            # retrieval succeeding, so this branch fires even with zero rows.
+            peers, extra = _sibling_names(target)
+            parts = ["You are about to CREATE " + Path(target).name
+                     + ", which does not exist yet. Creating a file is an "
+                     "architectural act: the question is not what you know "
+                     "about the subject, it is whether this codebase already "
+                     "has a surface that does this job."]
+            if peers:
+                listing = ", ".join(peers)
+                if extra:
+                    listing += ", +%d more" % extra
+                parts.append(
+                    "EXISTING " + (Path(target).suffix or "file")
+                    + " FILES IN THAT SAME DIRECTORY: " + listing
+                    + "\nIf one of these already does what you are about to "
+                      "build, extend it instead of adding a sibling. Adding a "
+                      "parallel surface duplicates whatever funnel/flow the "
+                      "existing one owns, and the two then drift.")
+            if rows:
+                parts.append(
+                    "BOSWELL PRIOR STATE (path-matched; may be loose — the "
+                    "governing decision is often NOT retrievable from a new "
+                    "file's name, so treat silence here as no evidence, not as "
+                    "approval):\n"
+                    + json.dumps(rows, ensure_ascii=False, indent=1))
+            return _context("\n\n".join(parts))
+
         if not rows:
             return None
 
