@@ -228,26 +228,25 @@ def evaluate(data):
                 "assumption." % (exc or type(exc).__name__))
 
         rows = []
-        slim = None
         query_tokens = set()
         try:
             import read_before_code
-            slim = read_before_code._slim  # one admission contract, not two
             if readstate is not None:
                 # Ground against the prompt's own words when it has some, and
                 # against the carried subject when it does not. Never the union:
                 # padding a rich prompt with stale topic tokens is how a gate
                 # starts admitting last-hour's subject as this-turn's context.
                 query_tokens = readstate.tokenize(query if thin else prompt)
+            # One admission AND selection contract, not two. select_rows keeps
+            # _slim as the gate and ranks survivors by grounding strength, so a
+            # deep strongly-grounded row is no longer crowded out by shallow
+            # weak ones — measured 2026-08-06 to be the reason Steve's own
+            # credential ruling (rank 34) never reached a session that then
+            # re-opened the question he had already closed.
+            rows = read_before_code.select_rows(
+                response.get("results") or [], query_tokens, MAX_RESULTS)
         except Exception:
-            slim = None
-        for rank, item in enumerate(response.get("results") or []):
-            row = slim(item, rank, query_tokens) if slim else None
-            if row is None:
-                continue
-            rows.append(row)
-            if len(rows) >= MAX_RESULTS:
-                break
+            rows = []
 
         state[session_id] = {"fp": fingerprint, "at": time.time(), "topic": topic}
         _save_state(state)

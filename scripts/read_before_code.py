@@ -69,6 +69,11 @@ SEARCH_LIMIT = 50
 # well-grounded rows for no reason.
 MAX_DISTANCE = 0.72
 MAX_RESULTS = 3
+# Weight of the search's own rank when selecting which admitted rows to inject.
+# Swept 0/2/4/6/10/20 against the 7-case backtest: 0-2 scored 3/7, 4 scored 3/7
+# at this cap, 6 and above scored 4/7. Six is the smallest value that reaches
+# the ceiling, so it is the least aggressive setting that wins.
+RANK_WEIGHT = 6.0
 # How deep a distance-less (BM25-only) row may sit and still be admitted.
 LEXICAL_TOP_N = 2
 CONTENT_CHARS = 700
@@ -368,6 +373,82 @@ def _grounded(query_tokens, item):
     return len(overlap - _GENERIC_LONG) >= GROUND_MIN_OVERLAP
 
 
+def _ground_strength(query_tokens, item):
+    """HOW STRONGLY a row is grounded — the number _grounded throws away.
+
+    _grounded answers yes/no and discards the magnitude, so callers taking the
+    first N admitted rows were really taking the SHALLOWEST N, not the best N.
+    This returns the magnitude so selection can rank on it.
+
+    Strong (>=GROUND_STRONG_LEN) distinctive tokens are weighted above merely
+    numerous ones: one shared "windshield" means more than three shared
+    four-letter words.
+    """
+    if not query_tokens or readstate is None:
+        return 0.0
+    try:
+        row_tokens = readstate.tokenize(
+            str(item.get("message") or "") + " " + str(item.get("content") or "")[:2000])
+    except Exception:
+        return 0.0
+    overlap = (_fold(query_tokens) & _fold(row_tokens)) - _GENERIC_LONG
+    if not overlap:
+        return 0.0
+    strong = sum(1 for t in overlap if len(t) >= GROUND_STRONG_LEN)
+    return float(strong * 2 + len(overlap))
+
+
+def select_rows(results, query_tokens, max_results=MAX_RESULTS):
+    """Pick the BEST admitted rows, not the shallowest ones.
+
+    WHY THIS EXISTS (backtested 2026-08-06 over 7 documented failures spanning
+    pricing, trading, ML training, repo hygiene, secrets and the tint quote
+    funnel): the governing memory was inside the top 50 for 5 of the 7, but
+    reached the model for only 3. The two that were found and dropped were the
+    worktree-merge-debt post-mortem at rank 19 and Steve's June credential
+    ruling at rank 34 — the exact decision whose absence had already caused
+    "I re-opened it twice" (c56a374b).
+
+    They were dropped because the caller walked the results in RANK order and
+    stopped at the first three that passed the gate, so three shallow,
+    weakly-grounded rows crowded out the row that actually answered the
+    question. That defeated the deliberate widening of SEARCH_LIMIT to 50,
+    which exists precisely because on-topic rows sit 20-45 deep.
+
+    Admission is unchanged — _slim is still the single contract, and a row that
+    fails grounding is still refused. Only the ORDER of what survives changes.
+
+    Selection BLENDS grounding strength with the search's own rank rather than
+    replacing one with the other. Measured on the same 7 cases:
+
+        pure rank order (previous behaviour) ... 3/7
+        pure grounding strength ................ 3/7   (recovered the rank-34
+                                                        credential ruling but
+                                                        lost the rank-1
+                                                        dead-man post-mortem)
+        blended, RANK_WEIGHT >= 6 .............. 4/7   no regressions
+
+    Ranking purely on grounding throws away RRF's hybrid signal, which is real:
+    the dead-man post-mortem was the single best row for its prompt and sat at
+    rank 1, yet scored below a wordier neighbour that happened to share more
+    tokens. Ranking purely on rank throws away topical precision. Only the
+    blend keeps both. Raising max_results to 4 or 5 was measured too and buys
+    nothing over the blend, so the injection stays small.
+    """
+    scored = []  # noqa: E501
+    for rank, item in enumerate(results or []):
+        row = _slim(item, rank, query_tokens)
+        if row is None:
+            continue
+        # Rank bonus decays fast: rank 0 -> +6.0, rank 1 -> +3.0, rank 5 -> +1.0,
+        # rank 34 -> +0.17. Shallow rows keep the edge they have earned without
+        # being able to bury a strongly-grounded deep row outright.
+        bonus = RANK_WEIGHT / (1.0 + rank)
+        scored.append((_ground_strength(query_tokens, item) + bonus, -rank, row))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [row for _, _, row in scored[:max_results]]
+
+
 def _slim(item, rank, query_tokens=None):
     """Return a slim high-confidence row, or None to abstain.
 
@@ -490,15 +571,8 @@ def evaluate(data):
         except Exception:
             return None  # Boswell unreachable / unkeyed -> silent allow
 
-        rows = []
         query_tokens = readstate.tokenize(" ".join(query_terms)) if readstate else set()
-        for rank, item in enumerate(response.get("results") or []):
-            row = _slim(item, rank, query_tokens)
-            if row is None:
-                continue
-            rows.append(row)
-            if len(rows) >= MAX_RESULTS:
-                break
+        rows = select_rows(response.get("results") or [], query_tokens)
 
         # Memo regardless of hit count: a miss means Boswell holds nothing for
         # this file, and re-querying on the next edit would buy nothing.
