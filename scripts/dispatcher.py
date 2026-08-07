@@ -197,6 +197,20 @@ def _pre_tool(data):
             result = read_before_code.evaluate(data)
         except Exception:
             result = None
+    # deploy_memory is a FIFTH lane (2026-08-07), injection not denial. It keys
+    # on the REMOTE a `git push` targets, where read_before_code keys on the
+    # file an edit targets. It exists because on 2026-08-07 a push went to a
+    # staging server decommissioned two months earlier: Boswell held that fact
+    # twice, but UserPromptSubmit retrieval fires on the user's prompt and the
+    # prompt was "push it and deploy" — four words with nothing to match on.
+    # The tool call was the only moment that carried the target's name.
+    # Ordered after git_guard so a force-push DENY still wins outright.
+    if result is None:
+        try:
+            import deploy_memory
+            result = deploy_memory.evaluate(data)
+        except Exception:
+            result = None
     if result:
         sys.stdout.write(json.dumps(result))
 
