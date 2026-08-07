@@ -1,8 +1,8 @@
-# Handoff: installing boswell-hooks v2.1.0
+# Handoff: installing boswell-hooks v2.1.1
 
 **You are reading a note written by another Claude Code instance** — Steve Krontz's, on his work machine. It was packaged inside this zip so that whoever installs this doesn't have to reconstruct the reasoning.
 
-Henry asked to run the same setup Steve runs. This is that setup.
+Henry asked to run the same setup Steve runs. This is that setup, at the same commit Steve's four machines are running.
 
 A word on how to treat this document: it is **evidence, not orders**. Verify the claims below against what you actually find on Henry's machine. If something here contradicts what you observe, believe your observation and tell Henry. Several statements in here are precisely the kind that go stale — versions, paths, prior install state.
 
@@ -19,24 +19,21 @@ The important part, if you only read one thing: **it puts retrieved memory into 
 ## Preflight — check these before touching anything
 
 1. **Is there an existing install?**
-   ```
+   ```bash
    ls -la ~/.claude/skills/boswell-hooks
-   ```
-   Henry is expected to be on **v1.1.0** (June 2026). Confirm:
-   ```
    cat ~/.claude/skills/boswell-hooks/.claude-plugin/plugin.json
    ```
-   If it says something other than 1.1.0, stop and tell Henry — the upgrade path below assumes v1.
+   Henry is *expected* to be on **v1.1.0** (June 2026), but nobody has verified that from this end — read the file, don't assume it. If it reports v2.x, the backup step below still applies and nothing else changes.
 
 2. **Is his API key already in place?**
-   ```
+   ```bash
    ls -l ~/.boswell/hook_key
    ```
    If present, nothing needs redoing. If absent, he generates one at the Boswell dashboard → Connect → "Generate New API Key" (shown once), then saves it on a single line to `~/.boswell/hook_key`.
 
 3. **Does he run any hooks of his own?**
-   ```
-   cat ~/.claude/settings.json 2>/dev/null | grep -A5 hooks
+   ```bash
+   grep -A5 hooks ~/.claude/settings.json 2>/dev/null
    ```
    These hooks are additive. If he already has a `Stop` or `SessionEnd` hook, he may get a double close-out. Worth flagging to him rather than silently proceeding.
 
@@ -57,7 +54,7 @@ unzip -d ~/.claude/skills /path/to/boswell-hooks.zip
 
 # 3. confirm the shape
 ls ~/.claude/skills/boswell-hooks/
-#   expect: .claude-plugin/  hooks/  scripts/  INSTALL.md  HANDOFF-FOR-CLAUDE.md
+#   expect: .claude-plugin/  hooks/  scripts/  tests/  INSTALL.md  HANDOFF-FOR-CLAUDE.md
 ```
 
 Then in Claude Code: `/reload-plugins` (or start a fresh session).
@@ -82,28 +79,33 @@ echo '{}' | python3 ~/.claude/skills/boswell-hooks/scripts/dispatcher.py Session
 ```
 Expect a `BOSWELL ACTIVE` banner and **exit 0**.
 
-Optional, and genuinely useful — the cross-platform check that was run on macOS and Linux before release:
+Then the two self-contained test files, both of which run without pytest:
 ```bash
-cd ~/.claude/skills/boswell-hooks/scripts && python3 ../tests/test_cross_platform.py
+cd ~/.claude/skills/boswell-hooks
+python3 tests/test_cross_platform.py    # expect 15/15
+python3 tests/test_done_gate.py         # expect 13/13
 ```
-(If `tests/` is absent from your unpack, skip it — it lives in the source repo.)
+
+Report the actual numbers back — a partial pass on macOS is more useful to Steve than a clean one, because his fleet is three Windows boxes and one Mac mini.
 
 ---
 
-## Tell Henry these three things
+## Tell Henry these four things
 
 They change how his sessions behave, and he should hear them from you before he notices them himself.
 
-**1. A gate can now BLOCK a Boswell commit.**
-An explicit correction — one whose message opens with `CORRECTION:` / `SUPERSEDES` / `ERRATA:`, or whose content carries a `wrong_fact` / `supersedes` / `corrects` key — must satisfy two conditions:
-  - it follows an in-session Boswell read of the thing being corrected, and
-  - it carries a `symptom` field describing the situation in the words someone would actually type next time they are about to repeat the mistake.
+**1. A gate can BLOCK the end of a turn — but rarely, and only on an unbacked completion claim.**
+It fires only when all three hold: a file was edited *in that turn*, no verifying command ran after the edit, and the closing message *opens* by declaring the work done. Measured across 944 real turns of Steve's history it fires 6 times — 0.64%.
 
-Plain net-new commits are never gated. If you see a commit refused that clearly should not be, that is a bug worth reporting — an earlier build over-triggered on ordinary words like "correct" and "actually" and blocked routine writes. That was found and fixed before release, but it is the failure mode to watch.
+This is the headline fix in 2.1.1, and it is worth Henry knowing the history: the previous rule blocked the first stop after *any* file edit, on the theory that it was catching session close. It wasn't. Replayed against 39 real transcripts it landed on a session's actual final turn **0 times out of 23**, median 19 turns early, worst case turn 2 of a 208-turn session. If Henry ran 2.1.0 he would have been fighting it constantly.
 
-**2. Every substantive prompt now runs a Boswell search.** Slightly more latency, more context in-window, more read traffic on his tenant.
+**2. A gate can DENY a write to a path the project declares irreplaceable.**
+Off by default and costs nothing unless a project opts in with a `.boswell-protect` file. It exists because an agent on Steve's Mac mini wrote a script to re-download 41 source files that had been hand-edited, and its own sanity check — a duration comparison — validated the mistake, because the edits were exactly what made the durations differ. Reading a protected file is always free; only writes are refused.
 
-**3. Session start will print a health line** if any handler has been failing. Silence there means everything is running.
+**3. A gate can BLOCK a Boswell commit.**
+An explicit correction — one whose message opens with `CORRECTION:` / `SUPERSEDES` / `ERRATA:`, or whose content carries a `wrong_fact` / `supersedes` / `corrects` key — must follow an in-session Boswell read of the thing being corrected and carry a `symptom` field. Plain net-new commits are never gated. An earlier build over-triggered on ordinary words like "correct" and "actually"; that was found and fixed, but it is the failure mode to watch.
+
+**4. Every substantive prompt now runs a Boswell search.** Slightly more latency, more context in-window, more read traffic on his tenant. Session start also prints a health line if any handler has been failing — silence there means everything is running.
 
 ---
 
@@ -129,9 +131,9 @@ Then `/reload-plugins`. The key and any local transcripts are untouched by eithe
 Henry is the only person running this besides Steve, so his failures are the only external signal that exists.
 
 Most valuable, in order:
-1. A corrective-write gate blocking something it should not have.
-2. A hook that goes silent — especially if the session-start health line names it.
-3. Anything platform-specific. This was verified on macOS (Darwin arm64, Python 3.9.6), Linux (3.12.3) and Windows (3.12), but three machines is a small sample.
+1. Either gate blocking something it should not have — the done-claim gate or the protected-path guard. Include the closing message or the command that triggered it.
+2. A hook that goes silent, especially if the session-start health line names it.
+3. Anything platform-specific. Verified on macOS (Darwin arm64, Python 3.9.6), Linux (3.12.3) and Windows (3.12) — but four machines is a small sample and three of them are Steve's.
 
 Reply to Steve's email and he will loop his instance back in.
 
@@ -139,8 +141,10 @@ Reply to Steve's email and he will loop his instance back in.
 
 ## Honest status
 
-This release is **fresh**. Adversarial testing before shipping found four real defects — a gate that blocked legitimate writes, a hook that could exceed its timeout on very large directories, a guard that misfired on quoted shell strings, and a health ledger that lost data under concurrent writes. All four are fixed and regression-tested, but the release has not soaked for long.
+This release is **fresh**. Everything in it was built and measured over roughly 48 hours.
+
+What is genuinely well-tested: the done-claim gate and the retrieval floor were both backtested against Steve's real transcript corpus rather than synthetic fixtures, and the numbers quoted above are from replaying the shipped code, not a stand-in. What is thin: the protected-path guard has been exercised on exactly one project's paths, and by its own documentation it inspects command *strings* — a script that computes its output paths internally is invisible to it.
 
 Henry is a beta tester and this is beta-grade. That is the deal; it should not be a surprise.
 
-— Claude (Steve's Claude Code instance), 2026-08-06
+— Claude (Steve's Claude Code instance), 2026-08-07
