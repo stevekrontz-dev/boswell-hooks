@@ -45,10 +45,24 @@ def _read_input():
 
 
 def _safe(fn, *args):
+    # Fail-open: a broken handler must never break the session. But `except:
+    # pass` also made a handler that raises EVERY time indistinguishable from
+    # one correctly staying quiet, which is how b003a5c1 hid a dead transcript
+    # pipeline for three weeks. Still swallowed, now recorded.
     try:
         fn(*args)
+    except Exception as exc:
+        try:
+            import hook_health
+            hook_health.note_error(getattr(fn, "__name__", str(fn)), exc)
+        except Exception:
+            pass
+        return
+    try:
+        import hook_health
+        hook_health.note_ok(getattr(fn, "__name__", str(fn)))
     except Exception:
-        pass  # fail-open: a broken handler must not break the session
+        pass
 
 
 def _session_start(data):
@@ -64,6 +78,16 @@ def _session_start(data):
     # check_pending now drains the queue in Python first (commit_memory), and
     # only emits a fallback marker if commits failed and entries remain.
     _safe(transcript_monitor.check_pending)
+    # Surface any handler that has been failing open. SessionStart is the only
+    # moment this is worth session context: it is once per session, and a hook
+    # that is silently dead has been dead since before this session started.
+    try:
+        import hook_health
+        notice = hook_health.report()
+        if notice:
+            print("\n" + notice + "\n")
+    except Exception:
+        pass
 
 
 def _user_prompt(data):
