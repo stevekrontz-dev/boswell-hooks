@@ -48,7 +48,7 @@ STATE_ROOT = Path(os.environ.get(
 # so a tenant can point at their own deployment without code changes.
 BOSWELL_API_BASE = os.environ.get(
     "BOSWELL_API_BASE",
-    "https://delightful-imagination-production-f6a1.up.railway.app").rstrip("/")
+    "https://v3.askboswell.com").rstrip("/")
 
 # Machine-local file holding the tenant-scoped `bos_` API key for server-to-server
 # commits (X-API-Key). NOT synced — each machine/tenant has its own. This is the

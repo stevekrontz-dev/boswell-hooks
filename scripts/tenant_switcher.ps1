@@ -17,7 +17,7 @@ $ProfileRoot = Join-Path $BoswellRoot 'tenants'
 $ApiBase = if ($env:BOSWELL_API_BASE) {
     $env:BOSWELL_API_BASE.TrimEnd('/')
 } else {
-    'https://delightful-imagination-production-f6a1.up.railway.app'
+    'https://v3.askboswell.com'
 }
 $CanonicalTenantIds = @{
     'main' = '00000000-0000-0000-0000-000000000001'

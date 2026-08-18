@@ -13,7 +13,7 @@ ARCHIVE_ROOT = Path(os.environ.get(
     "BOSWELL_TRANSCRIPTS_ARCHIVE", str(HOME / "boswell-transcripts")))
 API_BASE = os.environ.get(
     "BOSWELL_API_BASE",
-    "https://delightful-imagination-production-f6a1.up.railway.app",
+    "https://v3.askboswell.com",
 ).rstrip("/")
 HOOK_KEY_FILE = Path(os.environ.get(
     "BOSWELL_HOOK_KEY_FILE", str(HOME / ".boswell" / "hook_key")))
