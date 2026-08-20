@@ -218,6 +218,13 @@ def evaluate(data):
             # Resolve relative tokens against the session cwd so a bare
             # "songs/x/source.mp4" in a Bash command is still recognised.
             path = raw if os.path.isabs(raw) else os.path.join(cwd, raw)
+            # Only an EXISTING file can be destroyed. A path that isn't there
+            # yet has nothing pinned to it, so writing it is ordinary intake —
+            # denying that blocks the project's normal daily work (adding a new
+            # song) while protecting nothing. Measured 2026-08-20: the rule
+            # songs/*/source.mp4 refused 11 first-time downloads.
+            if not os.path.exists(path):
+                continue
             config = _find_config(path)
             if config is None:
                 continue
