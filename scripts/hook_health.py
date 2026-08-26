@@ -1,18 +1,14 @@
 """Make fail-open observable (boswell-hooks plugin).
 
 Every handler in this plugin is wrapped fail-open, which is correct: a hook bug
-must never break Steve's session. But the implementation was `except Exception:
+must never break the user's session. But the implementation was `except Exception:
 pass`, and that makes a handler which raises on EVERY invocation
 indistinguishable from one that is correctly staying quiet. The plugin's core
 safety property doubles as a blindfold.
 
-This is not hypothetical. Incident b003a5c1 (found 2026-08-04): `requests` went
-missing after a Python upgrade and an unguarded call in
-flush_pending_transcripts swallowed the failure. The home/iCloud transcript
-pipeline was dead for three weeks and 3,704 sessions never reached Boswell.
-Its own recorded lesson: "Fail-open + no health signal = undetectable rot. Two
-of six fleet machines were silently broken tonight and both had been that way
-for weeks."
+This is not hypothetical: a missing optional dependency once caused an
+unguarded transcript flush to fail silently for weeks. Fail-open without a
+health signal becomes undetectable rot.
 
 Two more instances surfaced on 2026-08-06 in one session: the bundled
 boswell.py kept pointing sessions at a scribe file deprecated a month earlier,
@@ -96,8 +92,8 @@ def _append(handler, ok, detail=None):
     load-mutate-save lost 318 of 320 updates and left only 2 of 8 handlers in
     the ledger. Worse than the lost counts, a concurrent writer could ERASE an
     error another handler had just recorded — the watcher silently dropping the
-    exact evidence it exists to preserve, which is the b003a5c1 failure class
-    reproduced inside the thing built to detect it.
+    exact evidence it exists to preserve, reproducing the failure class inside
+    the thing built to detect it.
 
     Small appends do not interleave that way, and this is the pattern
     readstate.py already uses for its per-session ledger. Reused rather than
@@ -165,9 +161,8 @@ def report():
         if not broken:
             return None
         return ("BOSWELL HOOK HEALTH — these handlers are failing open, which "
-                "means they are silently doing nothing. This is the b003a5c1 "
-                "failure class (a swallowed exception hid a dead transcript "
-                "pipeline for three weeks). Treat any guarantee they provide "
+                "means they are silently doing nothing. A swallowed exception "
+                "can hide a dead pipeline for weeks. Treat any guarantee they provide "
                 "as ABSENT until fixed:\n" + "\n".join(broken))
     except Exception:
         return None

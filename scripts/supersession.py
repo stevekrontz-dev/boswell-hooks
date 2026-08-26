@@ -1,23 +1,18 @@
 """Read-time supersession filter (boswell-hooks plugin).
 
-THE BUG THIS FIXES, measured 2026-08-07:
+THE BUG THIS FIXES:
 
-    query: "tintatlanta-website staging tintwoodstock.com deploy push"
-    rank 1  caa1e166  "SACRED PROTOCOL ... staging first"        (2026-06-12)
-    rank 2  617d0464  "SACRED PROTOCOL, SUPERSEDES caa1e166"     (2026-06-13)
+    query: "sample-website staging example.test deploy push"
+    rank 1  <old-hash>  "Protocol: staging first"
+    rank 2  <new-hash>  "Supersedes <old-hash>"
 
 The retired protocol outranks the record that retires it. That is not a ranking
 bug — a superseded record is *maximally* relevant to the query it was superseded
 on, because it is about exactly that subject. Relevance cannot tell you a thing
 stopped being true.
 
-It cost two real failures inside an hour: a deploy run against a staging server
-decommissioned two months earlier, then the deploy itself performed by a method
-retired on 2026-06-13, skipping a backup step marked non-negotiable.
-
-The metadata to prevent it already existed. corrective_gate has been forcing
-authors to write a `supersedes` field since June, and the records dutifully
-carry it. Nothing had ever READ that field at retrieval time. This does.
+The metadata to prevent this already exists: corrective records name the commit
+they supersede. This filter applies that relationship at retrieval time.
 
 WHY IT WITHHOLDS RATHER THAN DEMOTES:
 Demoting a superseded row still puts it in the window, and a SACRED-labelled
@@ -36,12 +31,12 @@ hash and is ignored.
 import json
 import re
 
-# "SUPERSEDES caa1e166" | 'supersedes": "caa1e1667a62"' | "supersedes my own cb058dcf"
+# "SUPERSEDES abcdef12" | 'supersedes": "abcdef123456"'
 #
 # The gap is any characters, non-greedy and bounded to 24, rather than a
-# punctuation class. MEASURED 2026-08-07: a punctuation-only gap missed
-# e159cd6c, whose message reads "supersedes my own cb058dcf" — ordinary words
-# sit between the verb and the hash. A hex-only exclusion class does not work
+# punctuation class. A punctuation-only gap misses messages such as
+# "supersedes my own abcdef12" because ordinary words sit between the verb and
+# the hash. A hex-only exclusion class does not work
 # either, because words like "the record" are themselves full of a-f.
 #
 # WHY THE `message` FIELD CARRIES THE WEIGHT HERE:
@@ -132,15 +127,12 @@ def verify_current(rows, search, limit=12, timeout=4.0):
     """Second pass: catch supersessions whose superseder is OUTSIDE `rows`.
 
     filter_rows only sees the result set it is handed, and that is not enough.
-    MEASURED 2026-08-07: cb058dcf was superseded 20 minutes later by e159cd6c,
-    but e159cd6c is about the deploy METHOD and shares no terms with a staging
-    query — it does not appear for that search at limit 60, so the set-local
-    filter could never see it, and the stale row was injected as row 1.
+    A superseder can discuss a method while the old record discusses a target,
+    so it may share no query terms and remain outside the original result set.
 
     A superseder always names its target's hash, so the hash itself is a
     reliable retrieval key even when nothing else about the two records
-    overlaps. Verified: searching "supersedes cb058dcf2f12" returns e159cd6c at
-    rank 0.
+    overlaps. Searching for "supersedes <hash>" provides that second pass.
 
     Run this on the SHORTLIST, not the candidate set — it costs one extra
     search, and only the rows about to be injected need to be proven current.
@@ -150,10 +142,8 @@ def verify_current(rows, search, limit=12, timeout=4.0):
     if not hashes:
         return rows, []
 
-    # ONE QUERY PER HASH, not one combined query. MEASURED 2026-08-07:
-    # "supersedes cb058dcf2f12" returns the superseder at rank 0, but
-    # "supersedes cb058dcf2f12 835e31adabed f11920008346" returns generic
-    # supersession chatter and drops it entirely — the extra hashes dilute the
+    # ONE QUERY PER HASH, not one combined query. Combining several hashes can
+    # return generic supersession chatter — the extra hashes dilute the
     # signal instead of widening it. Bounded by the shortlist size (3), so this
     # is a handful of small lookups, not a fan-out.
     extra = []

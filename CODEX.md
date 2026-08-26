@@ -1,54 +1,59 @@
-# Codex lifecycle
+# Boswell Hooks lifecycle contract
 
-The Codex plugin is discovered through `.codex-plugin/plugin.json` and the
-default `hooks/hooks.json`. Claude Code is installed from the isolated
-`claude/` runtime root, whose own default `hooks/hooks.json` points back to the
-shared scripts. The event catalogs must live under distinct plugin roots because
-both runtimes auto-discover the same default hook filename; Codex has compaction
-and subagent hooks but no `SessionEnd` event.
+The hook owns startup. A model does not.
 
-## Closed loop
+## Session startup
 
-1. `SessionStart` calls `/v2/startup` once per `session_id`, caches the raw
-   response, and injects a governed projection capped at 8,000 characters
-   before the first response. Synthesized warm responses preserve the
-   narrative, emotional/freshness, and decision/tension arcs directly. Legacy
-   responses are compacted locally; status-less backlog rows are never offered
-   as available work. A compact `startup_integrity` block distinguishes empty
-   evidence from failed sources and reports whether either compiler trimmed.
-   Cached `startup` and `resume` deliveries are zero-output successes so Codex
-   cannot replay the projection in bursts; `clear` reinjects the cached
-   orientation because it creates a fresh model context.
-2. `UserPromptSubmit` skips greetings and short follow-ups, then applies a
-   temporary precision-first gate to hybrid retrieval: only strong semantic
-   matches are eligible, noisy content classes are excluded, and at most two
-   memories are injected. Explicit Boswell search remains the broad-recall path.
-3. `PreToolUse` blocks material work without startup, blocks unsafe force pushes,
-   rejects `apply_patch` deletion of files larger than 8 MiB before Codex can
-   embed their full contents in legacy transcript history, and requires a
-   matching read before corrective Boswell commits.
-4. `PostToolUse` maintains mutation, verification, and Boswell-read ledgers.
-5. `PreCompact` spools a checkpoint; `PostCompact` validates the durable startup
-   cache without reinjecting stale orientation into model context.
-6. `Stop` spools the latest transcript and blocks once when changed files have
-   no recorded test, lint, or build evidence.
+On `SessionStart`, the adapter calls `/v2/startup` with `verbosity=warm`
+exactly once for the client session, stores the raw response in a durable
+machine-local cache, and injects a bounded orientation before the first model
+response.
 
-Startup and retrieval fail closed. Transcript capture and telemetry fail open
-into a machine-local queue. Set `BOSWELL_HOOKS_FAIL_OPEN=1` only for emergency
-diagnosis.
+The injected receipt explicitly satisfies the startup requirement. Models must
+not call `boswell_startup` again on later user messages. A cached `resume` is
+silent, `clear` reinjects the cached orientation into the new context without
+another network startup, and compaction validates the cache without replaying
+the briefing.
 
-## Authentication and tenant selection
+If the hook receipt is absent because the plugin did not run, client-level
+instructions may call `boswell_startup` once as a fallback. That fallback is
+never a per-message ritual.
 
-Named tenant profiles live at `~/.boswell/tenants/<name>.key`. Set
-`BOSWELL_TENANT=<name>` for an explicit session, or put the default profile name
-in `~/.boswell/default_tenant`. A selected profile outranks
-`BOSWELL_API_KEY`, preventing stale machine-wide environment variables from
-silently crossing tenant boundaries. A missing explicit profile fails closed.
+## Prompt-time retrieval
 
-Machines without named profiles retain the portable `BOSWELL_API_KEY` then
-`~/.boswell/hook_key` behavior. Steve's single-tenant machines can finally fall
-back to `~/.boswell/.internal-secret`. Secrets are never stored in the plugin or
-hook output.
+`UserPromptSubmit` is retrieval-only. It does not run startup.
 
-State defaults to `~/.boswell/codex-hooks` and raw transcripts to
-`~/boswell-transcripts/<machine>/<YYYY-MM>/`.
+The current precision-first gate:
+
+- skips greetings, acknowledgements, short continuations, and duplicate prompts;
+- searches only on substantive prompt text;
+- excludes transcripts, credentials, tasks, skills, manifests, and low-value
+  agent-only artifacts;
+- admits at most two rows and abstains when confidence is weak.
+
+Explicit Boswell search, recall, task briefing, and branch reads remain
+available to the model when broad or targeted evidence is actually needed.
+The future context-assembly planner can replace this temporary selector without
+changing the lifecycle contract.
+
+## Tool boundaries
+
+- `PreToolUse` requires a durable startup receipt before material work.
+- Corrective Boswell commits require an overlapping Boswell read.
+- Force pushes and project-declared protected paths receive dedicated guards.
+- File mutation hooks can retrieve prior state for the target at the moment it
+  becomes relevant, instead of injecting generic reminders on every turn.
+- `PostToolUse` records mutation, verification, and Boswell-read evidence.
+- `Stop` challenges unsupported completion claims.
+- `SessionEnd` captures and queues the Claude transcript.
+
+## Tenant isolation
+
+Plugin code and hook manifests contain no tenant identity, tenant UUID, internal
+fleet credential, persona, or private path. Tenant selection comes entirely
+from the machine-local API key or named profile. State, caches, and transcript
+queues remain machine-local.
+
+Startup and substantive retrieval fail closed. Transcript capture and health
+telemetry fail open into durable queues. `BOSWELL_HOOKS_FAIL_OPEN=1` exists
+only for emergency diagnosis.

@@ -23,14 +23,35 @@ mkdir -p "$STAGE/scripts" "$STAGE/hooks" "$STAGE/.claude-plugin" "$STAGE/tests" 
 
 cp claude/.claude-plugin/plugin.json "$STAGE/.claude-plugin/"
 cp claude/hooks/hooks.json           "$STAGE/hooks/"
-cp INSTALL.md HANDOFF-FOR-CLAUDE.md LICENSE "$STAGE/"
+cp INSTALL.md CODEX.md LICENSE "$STAGE/"
 
-# Handlers. Excludes in-tree test_*.py and the Windows-only tenant switcher.
-for f in scripts/*.py; do
-  case "$(basename "$f")" in
-    test_*) continue ;;
-  esac
-  cp "$f" "$STAGE/scripts/"
+# Runtime dependency closure for the Claude artifact. Keep this explicit: a
+# repository utility or historical experiment must not silently become shipped
+# code merely because it has a .py suffix.
+RUNTIME_FILES=(
+  boswell_client.py
+  codex_config.py
+  codex_dispatcher.py
+  config.py
+  corrective_gate.py
+  deploy_memory.py
+  dispatcher.py
+  done_gate.py
+  empty_result.py
+  git_guard.py
+  hook_health.py
+  prompt_retrieval.py
+  protected_paths.py
+  read_before_code.py
+  readstate.py
+  session_state.py
+  supersession.py
+  transcript_monitor.py
+  transcript_spool.py
+)
+for base in "${RUNTIME_FILES[@]}"; do
+  test -f "scripts/$base"
+  cp "scripts/$base" "$STAGE/scripts/"
 done
 
 # Only the test files that run standalone, without pytest — an installer

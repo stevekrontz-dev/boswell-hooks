@@ -1,95 +1,91 @@
-# boswell-hooks — Install Guide
+# Boswell Hooks installation
 
-Boswell's base workflow for Codex and Claude Code: structural startup context,
-prompt-time retrieval, read-before-corrective-write governance, transcript
-capture, compaction recovery, completion verification, and git-push safety.
+Boswell Hooks supplies the lifecycle bridge between a Boswell tenant and Codex
+or Claude Code. The plugin loads one startup briefing per session, retrieves a
+small amount of high-confidence context for substantive prompts, applies safety
+guards at the tool boundary, and queues transcripts durably.
 
-## Prerequisites
+## Requirements
 
+- A Boswell tenant
+- A tenant-scoped `bos_...` API key
 - Codex or Claude Code
-- Python 3.10+ for Codex; the isolated Claude adapter remains compatible with
-  Python 3.9 where its legacy `requests` dependency is already installed
-- A Boswell tenant and tenant-scoped `bos_...` API key
+- Python 3.10+ for Codex; Python 3.9+ for the Claude adapter
 
-The Codex adapter uses only Python's standard library. The legacy Claude
-transcript path still uses `requests`.
+The runtime uses only Python's standard library.
 
-## Authentication
+## Tenant authentication
 
-Put the tenant API key on one line in this machine-local file:
+For a single tenant, put its API key on one line in:
 
 ```text
 ~/.boswell/hook_key
 ```
 
-For multi-tenant machines, put each key in
-`~/.boswell/tenants/<name>.key`, write the safe default name to
-`~/.boswell/default_tenant`, and set `BOSWELL_TENANT=<name>` only for sessions
-that need another tenant. A selected named profile outranks
-`BOSWELL_API_KEY`; a missing selected profile fails closed.
+For a machine that can access several tenants, store each key in
+`~/.boswell/tenants/<profile>.key`. Put the safe default profile name in
+`~/.boswell/default_tenant`, or set `BOSWELL_TENANT=<profile>` for a process.
+A selected profile outranks `BOSWELL_API_KEY`; a missing selected profile
+fails closed instead of falling through to another tenant.
 
-Machines without named profiles keep the legacy precedence:
-`BOSWELL_API_KEY`, then `~/.boswell/hook_key`. Steve's single-tenant fleet may
-finally use `~/.boswell/.internal-secret`; that fallback is not portable to
-tenants.
+Never put a key in this plugin, a hook manifest, shell history, or a repository.
+The public plugin accepts tenant-scoped API keys only.
 
-Never place credentials inside the plugin, `hooks.json`, or a repository.
+## Codex
 
-## Codex installation
-
-Personal development installs live at `~/plugins/boswell-hooks` and are exposed
-by `~/.agents/plugins/marketplace.json`.
+Install `boswell-hooks` from the marketplace that publishes this repository:
 
 ```powershell
-codex plugin add boswell-hooks@personal
+codex plugin add boswell-hooks@<marketplace>
 ```
 
-Open `/hooks`, inspect the exact command-hook definitions, and trust them. Hook
-trust is hash-bound, so changed definitions require review again. Start a new
-thread after installation or update; lifecycle hooks are loaded at thread
-startup.
+Open `/hooks`, inspect and trust the command hooks, then start a new thread.
+Codex loads lifecycle hooks only at thread startup. The root
+`hooks/hooks.json` is discovered automatically; do not add a duplicate
+`hooks` field to `.codex-plugin/plugin.json`.
 
-The plugin automatically discovers `hooks/hooks.json`. Do not add a `hooks`
-field to `.codex-plugin/plugin.json`.
+## Claude Code
 
-## Claude Code installation
+Use the release zip, or install the repository's `claude/` directory as the
+Claude plugin root. Do not use the repository root as the Claude root because
+both clients auto-discover a default `hooks/hooks.json`.
 
-Install the repository's `claude/` subdirectory as the Claude plugin root. Do
-not install the repository root into Claude Code: both Claude and Codex
-auto-discover `hooks/hooks.json`, and the root file is Codex-specific.
-
-For a personal checkout at `~/plugins/boswell-hooks`, point the Claude skills
-entry at `~/plugins/boswell-hooks/claude`, then reload plugins. A tiny shim
-inside that isolated runtime root resolves the checkout and dispatches into the
-shared scripts.
+The packaged Claude artifact has a flat layout containing
+`.claude-plugin/`, `hooks/`, `scripts/`, and the public documentation.
+Reload plugins and begin a new session after installing an update.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BOSWELL_API_KEY` | — | Portable tenant key when no named profile is selected |
-| `BOSWELL_TENANT` | default profile | Explicit named tenant profile |
+| `BOSWELL_API_KEY` | — | Tenant key when no named profile is selected |
+| `BOSWELL_TENANT` | default profile | Named tenant profile for this process |
 | `BOSWELL_TENANT_PROFILE_ROOT` | `~/.boswell/tenants` | Named key files |
-| `BOSWELL_DEFAULT_TENANT_FILE` | `~/.boswell/default_tenant` | Safe default profile name |
-| `BOSWELL_HOOK_KEY_FILE` | `~/.boswell/hook_key` | Tenant-key file |
-| `BOSWELL_INTERNAL_SECRET_FILE` | `~/.boswell/.internal-secret` | Steve-only fallback |
-| `BOSWELL_API_BASE` | Production Railway API | Boswell deployment |
-| `BOSWELL_AGENT_ID` | `Codex-Root` | Agent-specific startup tasks |
-| `BOSWELL_HOOK_STATE` | `~/.boswell/codex-hooks` | State and outbound queue |
+| `BOSWELL_DEFAULT_TENANT_FILE` | `~/.boswell/default_tenant` | Default profile name |
+| `BOSWELL_HOOK_KEY_FILE` | `~/.boswell/hook_key` | Single-tenant key file |
+| `BOSWELL_API_BASE` | `https://v3.askboswell.com` | Boswell API authority |
+| `BOSWELL_AGENT_ID` | client name | Optional task-assignment identity |
+| `BOSWELL_TIMEZONE` | `UTC` | IANA timezone for startup's local clock |
+| `BOSWELL_HOOK_STATE` | client-specific directory under `~/.boswell` | Hook state and queues |
 | `BOSWELL_TRANSCRIPTS_ARCHIVE` | `~/boswell-transcripts` | Raw transcript archive |
 | `BOSWELL_HOOKS_FAIL_OPEN` | unset | Emergency diagnostic override |
 
-Startup and retrieval fail closed by default. Transcript capture and telemetry
-remain queued locally on failure. See `CODEX.md` for the lifecycle contract.
+Startup, substantive retrieval, and pre-action continuity checks fail closed.
+Transcript capture and health telemetry queue locally on failure.
 
-## Verification
+## Verify a checkout
 
 ```powershell
 python -m unittest discover -s tests -v
 python -m json.tool hooks/hooks.json
 python -m json.tool claude/hooks/hooks.json
-python scripts/codex_dispatcher.py SessionStart
 ```
 
-The dispatcher expects hook JSON on stdin; the final command without stdin is
-only a failure-policy probe. Normal invocation is owned by Codex.
+Build and inspect the Claude release artifact from Git Bash:
+
+```bash
+./build_release.sh
+python -m zipfile -l dist/boswell-hooks.zip
+```
+
+See `CODEX.md` for the event-by-event contract.

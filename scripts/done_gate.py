@@ -15,15 +15,15 @@ file mutations):
     median turns of work still to come ....  19
     worst case ............................ 206   (fired at turn 2 of 208)
 
-Zero for twenty-three. That is the "fighting with the stop gate" Steve reported:
+Zero for twenty-three. That is the failure mode users reported:
 you edit one file early, and the gate demands a full six-point close-out report
 while the actual work has barely started.
 
 THE NEW TRIGGER
 ---------------
 The gate's real purpose is not "the session is over" — it is the tenant rule
-*Steve declares done; never claim something is done or verified unless Steve
-signs off.* So it now fires on the CLAIM, not on the edit:
+*The human owner declares done; never claim something is done or verified
+without evidence.* So it now fires on the CLAIM, not on the edit:
 
     1. a file was mutated IN THIS TURN, and
     2. no verifying command ran after that mutation, and
@@ -89,7 +89,7 @@ CLAIM_WINDOW = 120
 REASON = (
     "DONE-CLAIM GATE — you just declared this complete, but nothing ran against "
     "the file(s) you changed this turn{files}.\n\n"
-    "Steve declares done, not you. Before stopping, either:\n"
+    "The human owner declares done, not the agent. Before stopping, either:\n"
     "  (a) prove it — run the check that fits what you touched (py_compile / php -l / "
     "tsc / the test / the real request against the live target) and show the output, or\n"
     "  (b) withdraw the claim — say plainly which parts are unverified and what would "

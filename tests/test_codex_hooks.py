@@ -32,18 +32,18 @@ class CodexHookTests(unittest.TestCase):
     def startup_payload():
         return {
             "local_time": "now",
-            "sacred_manifest": {"identity": "Wren", "active_commitments": []},
+            "sacred_manifest": {"identity": "Example tenant", "active_commitments": []},
             "recent_thread": [{"message": "recent"}],
             "open_tasks": [],
             "my_tasks": [],
-            "wren_bootloader": [],
+            "behavioral_context": [],
         }
 
     @staticmethod
     def synthesized_startup_payload():
         return {
             "local_time": "now",
-            "sacred_manifest": {"identity": "Wren", "active_commitments": []},
+            "sacred_manifest": {"identity": "Example tenant", "active_commitments": []},
             "continuity": {
                 "narrative_thread": {
                     "current_episode": {"status": "historical", "summary": "where we are"},
@@ -100,6 +100,20 @@ class CodexHookTests(unittest.TestCase):
             dispatcher._emit({"context": "memory — continuity"})
         self.assertEqual(json.loads(stream.value)["context"], "memory — continuity")
 
+    def test_startup_sends_client_timezone(self):
+        with (
+            mock.patch.object(dispatcher.boswell_client, "_request", return_value={}) as request,
+            mock.patch.object(dispatcher.boswell_client, "AGENT_ID", "Test Client"),
+            mock.patch.object(dispatcher.boswell_client, "TIMEZONE", "Europe/London"),
+        ):
+            dispatcher.boswell_client.startup()
+
+        self.assertEqual(request.call_args.kwargs["params"], {
+            "verbosity": "warm",
+            "agent_id": "Test Client",
+            "timezone": "Europe/London",
+        })
+
     def test_named_tenant_profile_outranks_stale_environment_key(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -124,8 +138,23 @@ class CodexHookTests(unittest.TestCase):
                 mock.patch.object(codex_config, "DEFAULT_TENANT_FILE", root / "missing"),
                 mock.patch.dict(
                     codex_config.os.environ,
-                    {"BOSWELL_TENANT": "henry", "BOSWELL_API_KEY": "wrong-key"},
+                    {"BOSWELL_TENANT": "missing", "BOSWELL_API_KEY": "wrong-key"},
                     clear=False,
+                ),
+            ):
+                self.assertEqual(codex_config.auth_headers(), {})
+
+    def test_internal_fleet_secret_is_never_used_by_public_plugin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(codex_config, "TENANT_PROFILE_ROOT", root / "profiles"),
+                mock.patch.object(codex_config, "DEFAULT_TENANT_FILE", root / "default"),
+                mock.patch.object(codex_config, "HOOK_KEY_FILE", root / "hook_key"),
+                mock.patch.dict(
+                    codex_config.os.environ,
+                    {"BOSWELL_INTERNAL_SECRET": "must-not-be-used"},
+                    clear=True,
                 ),
             ):
                 self.assertEqual(codex_config.auth_headers(), {})
@@ -158,6 +187,7 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(startup.call_count, 1)
         self.assertEqual(session_state.load("s1")["startup_calls"], 1)
         self.assertIn("STRUCTURALLY LOADED", first["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("exactly once", first["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(resumed, [None] * 8)
 
     def test_synthesized_orientation_preserves_three_arcs_under_hook_budget(self):
@@ -182,13 +212,13 @@ class CodexHookTests(unittest.TestCase):
 
     def test_legacy_orientation_is_bounded_and_does_not_offer_ambiguous_tasks(self):
         payload = self.startup_payload()
-        payload["sacred_manifest"]["identity"] = "Wren " + ("identity " * 400)
+        payload["sacred_manifest"]["identity"] = "Tenant " + ("identity " * 400)
         payload["recent_thread"] = [{"message": "recent " * 300}] * 8
         payload["open_tasks"] = [
             {"id": str(i), "title": "ambiguous " * 100, "priority": 1}
             for i in range(20)
         ]
-        payload["wren_bootloader"] = [{"message": "boot " * 300}] * 20
+        payload["behavioral_context"] = [{"message": "behavior " * 300}] * 20
 
         orientation = dispatcher._orientation(payload)
 

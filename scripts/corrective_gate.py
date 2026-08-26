@@ -1,9 +1,8 @@
 """Corrective-Write Guard (boswell-hooks plugin) — the read-before-write gate.
 
 PreToolUse handler on the Boswell commit tool (mcp ...boswell_commit). This is
-"Option C": the hard PreToolUse blocker the soft fix-intent injector
-(commit 0f1816b4, 2026-05-09) said it would need and deferred. Architecture is
-cloned from git_guard.py: pure-string inspection, no network/subprocess/latency,
+"Option C": a hard PreToolUse blocker paired with the soft fix-intent injector.
+Architecture is cloned from git_guard.py: pure-string inspection, no network/subprocess/latency,
 fail-open, DENY on match. The soft injector stays as the advisory layer; this is
 the enforcement layer.
 
@@ -24,8 +23,8 @@ Evidence comes from readstate.py's per-session ledger (a PostToolUse hook on the
 read tools). Overlap is checked against the UNION of each read's query AND
 response tokens (the fact-token usually lives in the response).
 
-Phantom-marker discipline (Workstream A, commit 12acf43e): this gate references
-only fields that actually ship on the boswell_commit tool — branch, content,
+This gate references only fields that actually ship on the boswell_commit tool
+— branch, content,
 message, content_type, tags — and `content` is handled as object OR JSON string
 (the schema allows both). No invented fields.
 """
@@ -187,7 +186,7 @@ _SYMPTOM_MIN_CHARS = 25
 # Nine of ten sampled net-new commits classified corrective on words like
 # "correct", "actually", "instead of", "no longer", and with the symptom gate
 # attached, four of four were refused outright. That is a routine-memory-write
-# outage, fleet-wide, from a hook meant to improve recall.
+# outage across every session, from a hook meant to improve recall.
 #
 # So the symptom requirement fires ONLY on an unambiguous self-declared
 # correction: a content dict carrying a corrective KEY, or a message that opens
@@ -300,12 +299,12 @@ if __name__ == "__main__":
     # Lightweight self-test of the corrective classifier (gate decisions are
     # exercised end-to-end in test_corrective_gate.py against a real ledger).
     samples = [
-        ("CORRECTION: Steve DOES own tintinstitute.com; supersedes prior", True),
+        ("CORRECTION: the account DOES own example.test; supersedes prior", True),
         ("SHIPPED: new dashboard v2 went live", False),
         ("UPDATE: rolled the comps forward to Q4", False),
         ("FIX: deployed the patch to atlas", False),
         ("This supersedes commit 2d6e7c6f — the mapping was wrong", True),
-        ("Net-new: first capture of tintwaco.com via Hunter", False),
+        ("Net-new: first capture of example.test via public source", False),
     ]
     print("corrective-intent classifier:")
     for msg, expected in samples:

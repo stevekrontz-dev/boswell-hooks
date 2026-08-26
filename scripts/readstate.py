@@ -58,14 +58,14 @@ MIN_TOKEN_LEN = 4  # drop tokens shorter than this (the/com/and noise)
 # spurious overlap between an unrelated read and a corrective payload.
 _STOPWORDS = {
     "this", "that", "with", "from", "have", "into", "your", "their", "about",
-    "memory", "commit", "branch", "content", "boswell", "tenant", "steve",
+    "memory", "commit", "branch", "content", "boswell", "tenant",
     "true", "false", "null", "type", "tags", "message", "claude", "search",
     "result", "results", "value", "field", "fields", "data", "note", "notes",
     "date", "created", "updated", "http", "https", "json", "object", "string",
 }
 
 # Qualifying read tools, matched by suffix so a differently-aliased MCP server
-# on the home machine still resolves (e.g. mcp__Boswell-Railway__boswell_search).
+# still resolves (for example, mcp__Boswell-Custom__boswell_search).
 _READ_SUFFIXES = ("boswell_search", "boswell_recall", "boswell_semantic_search")
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -105,8 +105,7 @@ def is_qualifying_read(tool_name):
 
 def tokenize(text):
     """Lowercase, split on non-alphanumerics, drop short tokens + stopwords.
-    Domains split naturally: 'tintinstitute.com' -> {'tintinstitute'} ('com'
-    is below MIN_TOKEN_LEN)."""
+    Domains split naturally: 'example.test' -> {'example', 'test'}."""
     if text is None:
         return set()
     if not isinstance(text, str):
@@ -259,19 +258,19 @@ if __name__ == "__main__":
         pass
 
     print("is_qualifying_read checks:")
-    for tn in ("mcp__Boswell-Railway__boswell_search",
-               "mcp__Boswell-Railway__boswell_semantic_search",
-               "mcp__Boswell-Railway__fetch",
-               "mcp__Boswell-Railway__boswell_recall",
-               "mcp__Boswell-Railway__boswell_startup",
+    for tn in ("mcp__Boswell-Custom__boswell_search",
+               "mcp__Boswell-Custom__boswell_semantic_search",
+               "mcp__Boswell-Custom__fetch",
+               "mcp__Boswell-Custom__boswell_recall",
+               "mcp__Boswell-Custom__boswell_startup",
                "Read", "WebFetch"):
         print(f"  {tn:48s} -> {is_qualifying_read(tn)}")
 
-    record({"tool_name": "mcp__Boswell-Railway__boswell_search",
+    record({"tool_name": "mcp__Boswell-Custom__boswell_search",
             "session_id": sid,
-            "tool_input": {"query": "domains owned tintinstitute.com"},
-            "tool_response": '{"message":"he DOES own tintinstitute.com"}'})
+            "tool_input": {"query": "domains owned example.test"},
+            "tool_response": '{"message":"the account DOES own example.test"}'})
     had, toks = recent_read_tokens(sid)
-    print(f"\nhad_read={had}; 'tintinstitute' in tokens -> "
-          f"{'tintinstitute' in toks}")
+    print(f"\nhad_read={had}; 'example' in tokens -> "
+          f"{'example' in toks}")
     print("tokens:", sorted(toks))

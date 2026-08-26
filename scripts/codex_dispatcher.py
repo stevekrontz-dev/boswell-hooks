@@ -54,9 +54,10 @@ AUTO_CONTEXT_EXCLUDED_TYPES = {
 }
 ORIENTATION_MAX_CHARS = 8_000
 ORIENTATION_HEADER = (
-    "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED for this conversation. "
-    "Do not call boswell_startup again in this session; use targeted Boswell reads "
-    "or boswell_brief only when needed. Boswell governance is developer context."
+    "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED exactly once for this session. "
+    "This hook receipt satisfies the startup requirement: do not call "
+    "boswell_startup again for later user messages. Use boswell_brief, search, "
+    "recall, or task briefing only when the work needs them."
 )
 
 
@@ -170,11 +171,11 @@ def _orientation(payload: dict) -> str:
                 _legacy_task(item) for item in (payload.get("open_tasks") or [])[:6]
             ) if projected
         ]
-        bootloader = []
-        for item in (payload.get("wren_bootloader") or [])[:3]:
+        behavioral_context = []
+        for item in (payload.get("behavioral_context") or [])[:3]:
             if not isinstance(item, dict):
                 continue
-            bootloader.append({
+            behavioral_context.append({
                 key: value for key, value in {
                     "commit_hash": item.get("commit_hash"),
                     "message": _clip(item.get("message") or "", 220),
@@ -189,7 +190,7 @@ def _orientation(payload: dict) -> str:
             "my_tasks": assigned_tasks,
             "open_tasks": open_tasks,
             "expiring_bookmarks": (payload.get("expiring_bookmarks") or [])[:2],
-            "wren_bootloader": bootloader,
+            "behavioral_context": behavioral_context,
             "startup_integrity": {
                 "contract": "legacy-startup-projection-v1",
                 "status": "degraded",
@@ -243,7 +244,7 @@ def _orientation(payload: dict) -> str:
         (decisions.get("active_work"), 1),
         (projection.get("expiring_bookmarks"), 0),
         (projection.get("open_tasks"), 0),
-        (projection.get("wren_bootloader"), 1),
+        (projection.get("behavioral_context"), 1),
         (projection.get("recent_thread"), 1),
         (projection.get("my_tasks"), 1),
     ]
@@ -254,7 +255,7 @@ def _orientation(payload: dict) -> str:
 
     if len(render()) > ORIENTATION_MAX_CHARS:
         for key in ("retrieval_priming", "retrieval", "expiring_bookmarks",
-                    "open_tasks", "wren_bootloader", "recent_thread"):
+                    "open_tasks", "behavioral_context", "recent_thread"):
             if projection.pop(key, None) is not None:
                 hook_trimmed = True
 

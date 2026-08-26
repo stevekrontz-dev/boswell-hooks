@@ -27,7 +27,7 @@ RETIRES = {"commit_hash": "617d04647d63bbbb", "created_at": "2026-06-13 16:24:03
            "message": "SACRED PROTOCOL (SUPERSEDES caa1e166): ff-pull is canonical",
            "content": '{"supersedes": "caa1e166 (RETIRED)"}'}
 DEAD = {"commit_hash": "d0d0efe19db4cccc", "created_at": "2026-06-17 19:08:37",
-        "message": "Staging (tintwoodstock.com) is DECOMMISSIONED",
+        "message": "Staging (retired.example.test) is DECOMMISSIONED",
         "content": '{"fact": "Shell access is not enabled on your account"}'}
 # Superseded by a record that shares NO vocabulary with a staging query — the
 # case the set-local filter provably cannot catch.
@@ -40,7 +40,7 @@ LATE = {"commit_hash": "e159cd6ccc77eeee", "created_at": "2026-08-07 05:42:40",
 
 def _repo(tmpdir, remote, url):
     """A throwaway checkout carrying one remote."""
-    root = pathlib.Path(tmpdir) / "tintatlanta-website"
+    root = pathlib.Path(tmpdir) / "sample-website"
     (root / ".git").mkdir(parents=True, exist_ok=True)
     (root / ".git" / "config").write_text(
         '[core]\n\trepositoryformatversion = 0\n'
@@ -76,15 +76,15 @@ def run_checks():
     ok(not fires("git status"), "unrelated command quiet")
 
     # --- remote -> host ---------------------------------------------------
-    root = _repo(tmpdir, "staging", "ssh://tintwoodstock.com/home1/tintwood/public_html")
+    root = _repo(tmpdir, "staging", "ssh://retired.example.test/srv/site")
     gd = dm._git_dir(os.path.join(root, "crm", "api"))
-    ok(gd is not None and gd.parent.name == "tintatlanta-website",
+    ok(gd is not None and gd.parent.name == "sample-website",
        "walks up to the repo root")
-    ok(dm._remote_host(gd, "staging") == "tintwoodstock.com", "ssh:// url -> host")
-    ok(dm._remote_host(_repo(tmpdir, "p", "tintwood@1.2.3.4:2222/x") and
-                       dm._git_dir(_repo(tmpdir, "p", "tintwood@1.2.3.4:2222/x")), "p")
+    ok(dm._remote_host(gd, "staging") == "retired.example.test", "ssh:// url -> host")
+    ok(dm._remote_host(_repo(tmpdir, "p", "deploy@1.2.3.4:2222/x") and
+                       dm._git_dir(_repo(tmpdir, "p", "deploy@1.2.3.4:2222/x")), "p")
        == "1.2.3.4", "user@host:port url -> host")
-    ok("tintwoodstock.com" in dm._query("tintatlanta-website", "staging", "tintwoodstock.com"),
+    ok("example.test" in dm._query("sample-website", "staging", "example.test"),
        "host reaches the query (a bare 'staging' retrieves nothing)")
 
     # --- supersession -----------------------------------------------------
@@ -147,7 +147,7 @@ def run_checks():
     ok(not any(c.startswith("cb058dcf") for c in commits), "orphan-superseded not injected")
     ok(any(c.startswith("d0d0efe1") for c in commits), "the decommission notice IS injected")
     ok(rows == sorted(rows, key=lambda r: r["recorded"], reverse=True), "newest first")
-    ok("tintwoodstock.com" in text and "STOP" in text, "header names the host and says stop")
+    ok("retired.example.test" in text and "STOP" in text, "header names the host and says stop")
 
     print("\n%d/%d passed" % (sum(results), len(results)))
     return results

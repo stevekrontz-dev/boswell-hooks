@@ -18,8 +18,7 @@ This block used to read "Only the PreToolUse and Stop handlers may emit". That
 was true when it was written in June and silently stopped being true when
 prompt_retrieval started injecting on UserPromptSubmit; nobody re-checked it, so
 it sat here as a false constraint that would have talked the next author out of
-a working mechanism. Steve, 2026-08-06: "the first run at a contract may be
-stale due to progression." Verify this list against the harness before trusting
+a working mechanism. Verify this list against the harness before trusting
 it — do not inherit it either.
 
 All handler state lives machine-local under ~ (see each module), never inside
@@ -27,10 +26,14 @@ this synced plugin directory.
 """
 import sys
 import json
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+os.environ.setdefault("BOSWELL_AGENT_ID", "Claude Code")
+os.environ.setdefault(
+    "BOSWELL_HOOK_STATE", str(Path.home() / ".boswell" / "claude-hooks"))
 
 
 def _read_input():
@@ -47,8 +50,8 @@ def _read_input():
 def _safe(fn, *args):
     # Fail-open: a broken handler must never break the session. But `except:
     # pass` also made a handler that raises EVERY time indistinguishable from
-    # one correctly staying quiet, which is how b003a5c1 hid a dead transcript
-    # pipeline for three weeks. Still swallowed, now recorded.
+    # one correctly staying quiet, which once hid a dead transcript pipeline for
+    # weeks. Still swallowed, now recorded.
     try:
         fn(*args)
     except Exception as exc:
@@ -66,28 +69,38 @@ def _safe(fn, *args):
 
 
 def _session_start(data):
-    import boswell
-    import transcript_monitor
-    _safe(boswell.session_start)
-    # Markers dropped 2026-06-06 (all pointed at data the LLM already has or that
-    # doesn't exist):
-    #  - load_sacred: boswell_startup (mandated by CLAUDE.md) already returns the
-    #    sacred_manifest full-text — was a redundant double-load.
-    #  - load_tool_registry: no curated tool_registry exists in Boswell, and the
-    #    harness already surfaces the full tool/skill/MCP inventory at startup.
-    # check_pending now drains the queue in Python first (commit_memory), and
-    # only emits a fallback marker if commits failed and entries remain.
-    _safe(transcript_monitor.check_pending)
-    # Surface any handler that has been failing open. SessionStart is the only
-    # moment this is worth session context: it is once per session, and a hook
-    # that is silently dead has been dead since before this session started.
+    """Load and emit the same durable one-time startup receipt as Codex."""
+    import codex_dispatcher
+
+    result = codex_dispatcher._session_start(data)
+    if result is None:
+        return
+
+    notices = []
+    try:
+        import transcript_monitor
+        notice = transcript_monitor.check_pending()
+        if notice:
+            notices.append(notice)
+    except Exception as exc:
+        try:
+            import hook_health
+            hook_health.note_error("check_pending", exc)
+        except Exception:
+            pass
     try:
         import hook_health
         notice = hook_health.report()
         if notice:
-            print("\n" + notice + "\n")
+            notices.append(notice)
     except Exception:
         pass
+
+    if notices:
+        output = result.get("hookSpecificOutput")
+        if isinstance(output, dict) and output.get("additionalContext"):
+            output["additionalContext"] += "\n" + "\n".join(notices)
+    sys.stdout.write(json.dumps(result, ensure_ascii=True))
 
 
 def _user_prompt(data):
@@ -101,8 +114,24 @@ def _user_prompt(data):
     # The replacement is deliberately NOT another marker. prompt_retrieval runs
     # a real Boswell search on the prompt and injects the hits, so the model
     # gets data it does not have rather than an instruction it will skim. That
-    # distinction is the whole point of the original 2026-06-06 removal, and of
-    # the STRUCTURAL-NOT-ASPIRATIONAL commitment.
+    # distinction is the whole point of structural hook design.
+    try:
+        import session_state
+        sid = data.get("session_id")
+        ready = (
+            session_state.load(sid).get("startup_loaded")
+            and session_state.load_startup_cache(sid) is not None
+        )
+    except Exception:
+        ready = False
+    if not ready:
+        result = {
+            "continue": False,
+            "stopReason": "Boswell startup continuity is missing for this session.",
+            "systemMessage": "Boswell startup continuity is missing for this session.",
+        }
+        sys.stdout.write(json.dumps(result))
+        return
     try:
         import prompt_retrieval
         result = prompt_retrieval.evaluate(data)
@@ -114,12 +143,6 @@ def _user_prompt(data):
 
 def _post_tool(data):
     tool = data.get("tool_name") or ""
-    file_path = ""
-    ti = data.get("tool_input")
-    if isinstance(ti, dict):
-        file_path = ti.get("file_path") or ti.get("path") or ""
-    import boswell
-    _safe(boswell.log_tool, tool, file_path)
     if tool == "Bash":
         import transcript_monitor
         _safe(transcript_monitor.heartbeat)
@@ -163,11 +186,29 @@ def _pre_tool(data):
     # only on the file-mutation tools, which neither guard above matches, and it
     # never denies — it injects the Boswell prior state for the file as
     # additionalContext so the stored state is in the window before the edit
-    # exists. Steve's ask was "beaten in the head with grok before coding every
-    # turn"; a per-turn banner is the context-marker failure mode the sacred
-    # STRUCTURAL-NOT-ASPIRATIONAL commitment names, so this carries the data
+    # exists. A per-turn banner becomes wallpaper, so this carries the data
     # instead of the instruction. Ordered last: the two DENY gates get first
     # refusal, and injection can never mask a block.
+    # Structural continuity is the first lane. Claude and Codex share the same
+    # durable session receipt, so a material tool cannot run if SessionStart did
+    # not complete or its cache disappeared.
+    try:
+        import codex_dispatcher
+        result = codex_dispatcher._pre_tool(data)
+    except Exception:
+        result = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "Boswell startup governance could not verify this session."
+                ),
+            }
+        }
+    if result is not None:
+        sys.stdout.write(json.dumps(result))
+        return
+
     result = None
     try:
         import git_guard
@@ -175,8 +216,8 @@ def _pre_tool(data):
     except Exception:
         result = None
     # protected_paths is a FOURTH deny lane (2026-08-07). It spans both Bash and
-    # the mutation tools, because the incident that motivated it (M5 session
-    # a214e3fa) destroyed files through a SCRIPT — a mutation-tool guard never
+    # the mutation tools, because the motivating incident destroyed files
+    # through a SCRIPT — a mutation-tool guard never
     # saw it. No-op unless the project ships a .boswell-protect file, so it
     # costs nothing on installs that never opt in.
     if result is None:
@@ -227,9 +268,7 @@ def _stop(data):
 
 
 def _session_end(data):
-    import boswell
     import transcript_monitor
-    _safe(boswell.session_end)
     # sync_session removed: it POSTed to a /sync endpoint that 404s (the real
     # route is /v2/sync with a different payload). The actual session record is
     # the transcript capture below, not this dead call.

@@ -1,6 +1,6 @@
 {
   "name": "boswell-hooks",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Boswell memory, retrieval, transcript, and completion-governance hooks for Codex.",
   "author": {
     "name": "Steve Krontz",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Boswell Hooks",
     "shortDescription": "Persistent memory and lifecycle governance for Codex.",
-    "longDescription": "Loads Boswell before the first response, retrieves relevant memories on substantive prompts, guards corrective writes, checkpoints compaction, verifies changed work, and spools transcripts durably.",
+    "longDescription": "Loads Boswell exactly once before the first response, retrieves relevant memories only for substantive prompts, guards corrective writes, checkpoints compaction, verifies changed work, and spools transcripts durably.",
     "developerName": "Steve Krontz",
     "category": "Productivity",
     "capabilities": [

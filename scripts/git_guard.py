@@ -1,9 +1,9 @@
 """git push safety guard (boswell-hooks plugin).
 
 PreToolUse(Bash) handler. Pure-string inspection of `git push` commands — no
-network, no subprocess, no latency. Blocks the one IRREVERSIBLE footgun in
-Steve's deploy setup: force-pushing to a HostGator deploy remote, which erases
-the production auto-backup commits (they are NOT recoverable).
+network, no subprocess, no latency. Blocks an irreversible deployment footgun:
+force-pushing to protected deployment remotes can erase server-side backup
+commits.
 
 TWO DIFFERENT RULES — do not collapse them (docstring corrected 2026-07-15
 after a self-test showed the text and the behavior disagreed):
@@ -11,9 +11,8 @@ after a self-test showed the text and the behavior disagreed):
   * DEPLOY remotes (production/staging): ANY force is DENIED, and that
     deliberately INCLUDES --force-with-lease. A lease only protects refs you
     have not fetched; once the backup bot's commits are in your local ref cache
-    the lease check passes and the force still erases them. Boswell DEPLOY
-    REFERENCE 868dea38 is absolute: "NEVER force-push (it erases the backups).
-    Reconcile with a merge." There is no lease-shaped exception, so do not
+    the lease check passes and the force still erases them. There is no
+    lease-shaped exception on protected deployment remotes, so do not
     "fix" this by letting --force-with-lease through on these remotes.
   * EVERY OTHER remote (origin, feature repos): a bare --force/-f gets an ASK
     that nudges toward --force-with-lease. That nudge applies HERE only.
@@ -31,9 +30,7 @@ Returns a PreToolUse decision dict, or None to stay silent (allow).
 """
 import shlex
 
-# HostGator deploy remotes where a force-push erases prod auto-backup commits.
-# (Boswell DEPLOY REFERENCE 868dea38: "NEVER force-push (it erases the
-# backups). Reconcile with a merge.")
+# Conventional deploy remotes where a force-push can erase backup commits.
 DEPLOY_REMOTES = {"production", "staging"}
 FORCE_TOKENS = {"--force", "-f", "--force-with-lease"}
 
@@ -94,8 +91,7 @@ def evaluate(data):
                 "BLOCKED: force-push to deploy remote '%s'. This erases the "
                 "production auto-backup commits, which are NOT recoverable. "
                 "Reconcile with a merge instead: fetch the remote, "
-                "git merge %s/<branch>, then push WITHOUT --force. "
-                "(Boswell DEPLOY REFERENCE 868dea38.)"
+                "git merge %s/<branch>, then push WITHOUT --force."
                 % (info["remote"], info["remote"]))
         if info["bare_force"]:
             return _decision(

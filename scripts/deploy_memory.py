@@ -4,13 +4,11 @@ PreToolUse handler on Bash. When the command is `git push <remote>`, it asks
 Boswell what is known about THAT remote and injects the answer before the push
 runs. It never denies.
 
-WHY THIS EXISTS (2026-08-07, Steve watching deliberately):
+WHY THIS EXISTS:
 
-Steve said "push it and deploy". The push went to `staging`, which had been
-DECOMMISSIONED on 2026-06-17 — a fact Boswell held twice, one of which Steve
-had personally confirmed. Two failed pushes and a diagnostic SSH connection
-went into rediscovering it. He let it run on purpose, "waiting to see if a hook
-would bring you the answer."
+The user said "push it and deploy". The push targeted a retired remote — a fact
+Boswell already held. Prompt-time retrieval had no chance because the short
+prompt did not name the repository, remote, or host.
 
 None could. UserPromptSubmit retrieval fires on the USER'S prompt, and the
 prompt was four words — "push it and deploy" — with nothing for either search
@@ -26,7 +24,7 @@ to be edited, this one keys on the REMOTE about to be pushed to.
 
 WHY IT RESOLVES THE REMOTE TO A HOST:
 "staging" is a generic word that retrieves nothing useful. The .git/config URL
-turns it into "tintwoodstock.com", which is the token the decommission records
+turns it into "retired.example.test", which is the token decommission records
 are actually written about. Reading .git/config is a plain file read — no
 subprocess, no network, no git invocation.
 
@@ -243,7 +241,7 @@ def evaluate(data):
             "BOSWELL — what is known about the push target `%s`%s, retrieved "
             "before this push runs.\n\nNEWEST FIRST. If any row says this "
             "target is decommissioned, unreachable, or that the deploy method "
-            "changed, STOP and tell Steve rather than running the command. "
+            "changed, STOP and tell the user rather than running the command. "
             "Deploy protocols go stale: check for a newer record before "
             "following an older one, whatever it is labelled.\n"
             % (remote, (" (" + host + ")") if host else ""))

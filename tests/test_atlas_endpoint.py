@@ -13,7 +13,7 @@ ATLAS = "https://v3.askboswell.com"
 RAILWAY = "delightful-imagination-production-f6a1.up.railway.app"
 
 
-def test_python_hook_defaults_use_atlas() -> None:
+def test_python_hook_default_uses_atlas() -> None:
     environment = os.environ.copy()
     environment.pop("BOSWELL_API_BASE", None)
     result = subprocess.run(
@@ -21,8 +21,7 @@ def test_python_hook_defaults_use_atlas() -> None:
             sys.executable,
             "-c",
             (
-                "import config, codex_config; "
-                "print(config.BOSWELL_API_BASE); print(codex_config.API_BASE)"
+                "import codex_config; print(codex_config.API_BASE)"
             ),
         ],
         cwd=ROOT / "scripts",
@@ -32,7 +31,7 @@ def test_python_hook_defaults_use_atlas() -> None:
         text=True,
     )
 
-    assert result.stdout.splitlines() == [ATLAS, ATLAS]
+    assert result.stdout.splitlines() == [ATLAS]
 
 
 def test_tenant_switcher_default_uses_atlas() -> None:

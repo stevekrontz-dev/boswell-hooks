@@ -21,9 +21,8 @@ TENANT_PROFILE_ROOT = Path(os.environ.get(
     "BOSWELL_TENANT_PROFILE_ROOT", str(HOME / ".boswell" / "tenants")))
 DEFAULT_TENANT_FILE = Path(os.environ.get(
     "BOSWELL_DEFAULT_TENANT_FILE", str(HOME / ".boswell" / "default_tenant")))
-INTERNAL_SECRET_FILE = Path(os.environ.get(
-    "BOSWELL_INTERNAL_SECRET_FILE", str(HOME / ".boswell" / ".internal-secret")))
-AGENT_ID = os.environ.get("BOSWELL_AGENT_ID", "Codex-Root")
+AGENT_ID = os.environ.get("BOSWELL_AGENT_ID", "Codex")
+TIMEZONE = os.environ.get("BOSWELL_TIMEZONE", "UTC")[:128]
 FAIL_OPEN = os.environ.get("BOSWELL_HOOKS_FAIL_OPEN", "").lower() in {
     "1", "true", "yes", "on"
 }
@@ -60,11 +59,13 @@ def selected_tenant_profile() -> str | None:
 
 
 def auth_headers() -> dict[str, str]:
-    """Prefer a named profile, then portable auth, then legacy fallbacks.
+    """Resolve only tenant-scoped portable authentication.
 
     A named profile deliberately outranks BOSWELL_API_KEY. This prevents a stale
     machine-wide environment variable from silently crossing tenant boundaries.
-    Machines without profiles retain the original portable-key behavior.
+    Machines without profiles retain the portable environment/file behavior.
+    Fleet-internal credentials are intentionally unsupported in this public
+    package: identical code is authorized only by the selected tenant key.
     """
     profile = _profile_name()
     profile_key = _first_secret(TENANT_PROFILE_ROOT / f"{profile}.key") if profile else None
@@ -77,9 +78,5 @@ def auth_headers() -> dict[str, str]:
     )
     if api_key:
         return {"X-API-Key": api_key}
-    internal = os.environ.get("BOSWELL_INTERNAL_SECRET", "").strip() or _first_secret(
-        INTERNAL_SECRET_FILE)
-    if internal:
-        return {"X-Boswell-Internal": internal}
     return {}
 

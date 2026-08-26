@@ -5,19 +5,19 @@ nothing, it says so — because an empty result from a silenced command is not a
 negative finding, it is an unknown, and the two are indistinguishable at the
 point where the model draws its conclusion.
 
-WHY THIS EXISTS (measured, session 615d701f, 2026-08-06):
-  * `find "C:/Users/Steve/.claude" -name "dispatcher.py" 2>/dev/null | head -5`
-    returned nothing. Reported to Steve as "no dispatcher.py anywhere".
+WHY THIS EXISTS:
+  * `find "/Users/example/.claude" -name "dispatcher.py" 2>/dev/null | head -5`
+    returned nothing and was misreported as "no dispatcher.py anywhere".
     PowerShell then found four. The find had failed, not searched.
-  * `ls -la "C:/Users/Steve/.claude" | head -20` truncated before `skills/`.
+  * `ls -la "/Users/example/.claude" | head -20` truncated before `skills/`.
     Reported as "the plugin isn't installed". It was installed, in
     ~/.claude/skills/boswell-hooks, behind a Windows junction.
 Both were absence-of-evidence reported as evidence-of-absence, in a diagnosis
-Steve was relying on. Neither is a reasoning failure the model can be reminded
+the user was relying on. Neither is a reasoning failure the model can be reminded
 out of — the shell genuinely returned nothing, and nothing looks like an answer.
 
 WHY IT CARRIES DATA AND NOT A REMINDER:
-Per STRUCTURAL-NOT-ASPIRATIONAL, a standing "be careful with 2>/dev/null" note
+Per structural hook design, a standing "be careful with 2>/dev/null" note
 is wallpaper. This fires only on the exact commands where the ambiguity is real
 and names the specific suppression it saw, so it is a fact about THIS command.
 

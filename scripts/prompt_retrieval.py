@@ -5,31 +5,29 @@ search and injects the hits as `additionalContext`, so stored state is in the
 window BEFORE the model reasons — not after it has already answered from
 assumption.
 
-WHY THIS EXISTS (Steve, 2026-08-04): "you are supposed to be beaten in the
-fucking head with ask boswell and grok before coding EVERY FUCKING TURN."
+WHY THIS EXISTS:
+Relevant stored state must be present before the model reasons, not requested
+after the model has already acted from an assumption.
 
 WHY IT INJECTS DATA AND NEVER A REMINDER:
 The obvious build is a per-turn string that says GROK BEFORE CODING. That is
-precisely what the tenant's STRUCTURAL-NOT-ASPIRATIONAL commitment forbids —
-"never delegated to the model via context markers it will ignore" — and
-"injections carry data the model lacks, not tasks." A fixed string becomes
+precisely the context-marker failure mode this plugin avoids: injections carry
+data the model lacks, not tasks. A fixed string becomes
 wallpaper within a handful of turns. Retrieved memories do not: they change
 every turn and they carry facts the model provably does not have.
 
 WHY IT IS NOT ENOUGH TO GATE ONLY THE EDIT PATH:
 read_before_code.py covers mutations, so "grok before coding" is handled. But
-on 2026-08-04 the model reported wrong fleet versions off stale git tracking
+the model once reported wrong multi-machine versions off stale git tracking
 data without editing a single file — no mutation, no hook, no correction. Turns
 where the model only reasons and answers are exactly where that drift lives.
 This hook covers those.
 
 BOSWELL-DOWN BEHAVIOUR:
-The sacred commitment BOSWELL-DOWN-STOP says "Boswell unreachable = full stop:
-halt, alert Steve, wait." The Codex adapter implements that by refusing the
-turn. Doing that here would let a transient blip hard-block Steve's prompts,
-which is its own failure. Instead this injects an explicit UNREACHABLE notice —
-which is the *data* the model needs in order to honour the commitment itself
-and tell Steve rather than silently proceeding as though it has memory.
+The Boswell-down contract says an unreachable substrate must be surfaced rather
+than hidden. This adapter injects an explicit failure notice so the client can
+apply its configured outage policy instead of proceeding as though it has
+memory.
 
 Design constraints inherited from the plugin:
   * Fail-open on everything except an explicit Boswell outage, which is
@@ -59,7 +57,7 @@ SEARCH_TIMEOUT = 8.0
 # deep, so a small window returns loosely-related noise while the actual answer
 # is invisible. Widen the candidate set; the grounding gate is what selects.
 SEARCH_LIMIT = 50
-MAX_RESULTS = 3
+MAX_RESULTS = 2
 
 STATE_NAME = "prompt_retrieval.json"
 
@@ -116,8 +114,7 @@ def _merge_topic(previous, fresh):
     """Newest-first rolling subject. Recency wins: the tokens from this turn go
     to the front, older ones survive behind them until they fall off the end.
 
-    Why a rolling topic exists at all (Steve, 2026-08-04: "somehow it needs
-    better context of the turns"): the hook receives ONE string. Real turns are
+    The hook receives ONE string. Real turns are
     not self-contained — "tldr", "try now", "is that the right method of action
     here?" carry their subject in the conversation, not in their words. Judged
     on the prompt alone those turns retrieve nothing, which looked like caution
@@ -133,7 +130,7 @@ def _merge_topic(previous, fresh):
 def _eligible(prompt):
     """Skip greetings and bare continuations.
 
-    Steve asked for EVERY turn. This gate is deliberately narrow: it only skips
+    This gate is deliberately narrow: it only skips
     prompts that carry no retrievable subject of their own ("yes", "do it",
     "ok"), which inherit the active thread and would otherwise fire a global
     query for a single word and inject noise. Everything substantive retrieves.
@@ -171,8 +168,8 @@ def evaluate(data):
         topic = _merge_topic(topic, _topic_tokens(prompt))
 
         # TOPIC CARRY-OVER IS DELIBERATELY NOT USED AS A QUERY (2026-08-04).
-        # Steve asked for better cross-turn context and the mechanism below was
-        # built to borrow the session subject on thin turns. MEASURED on a
+        # The mechanism below was built to borrow the session subject on thin
+        # turns. Measured on a
         # replay of this session's real turns it was net-NEGATIVE: it fixed
         # "its a plugin" (found the gate + plugin history, previously silent)
         # but "try now" retrieved InstallBay SSH inventory and "compare it to
@@ -206,8 +203,8 @@ def evaluate(data):
             # honour BOSWELL-DOWN-STOP instead of answering from assumption.
             #
             # But a REJECTED CREDENTIAL is not a dead substrate, and the two
-            # demand opposite responses: re-key vs halt-the-fleet. On 2026-08-05
-            # a revoked key made every turn on this box announce "BOSWELL
+            # demand opposite responses: re-key vs halt-the-system. A revoked
+            # key once made every turn announce "BOSWELL
             # UNREACHABLE ... halt" while Boswell served traffic normally at
             # 3.8.46. Report what actually happened, and carry the status code
             # instead of flattening it to a bare exception class name.
@@ -218,13 +215,13 @@ def evaluate(data):
                     "is revoked or invalid. Boswell itself is NOT down and "
                     "BOSWELL-DOWN-STOP does NOT apply; do not halt. Per-turn "
                     "memory retrieval is unavailable until the key is replaced, "
-                    "so verify before asserting anything about Steve's systems, "
-                    "and tell him this machine needs re-keying." % status)
+                    "so verify before asserting tenant or project state, and "
+                    "tell the user this machine needs re-keying." % status)
             return _context(
                 "BOSWELL UNREACHABLE — per-turn memory retrieval failed (%s). "
                 "You are operating WITHOUT memory for this turn. Sacred "
-                "commitment BOSWELL-DOWN-STOP applies: halt, tell Steve, wait. "
-                "Do not answer substantive questions about his systems from "
+                "configured Boswell outage policy applies: halt and tell the user. "
+                "Do not answer substantive questions about tenant systems from "
                 "assumption." % (exc or type(exc).__name__))
 
         rows = []
@@ -240,8 +237,8 @@ def evaluate(data):
             # One admission AND selection contract, not two. select_rows keeps
             # _slim as the gate and ranks survivors by grounding strength, so a
             # deep strongly-grounded row is no longer crowded out by shallow
-            # weak ones — measured 2026-08-06 to be the reason Steve's own
-            # credential ruling (rank 34) never reached a session that then
+            # weak ones — measured to be the reason a governing credential
+            # ruling (rank 34) never reached a session that then
             # re-opened the question he had already closed.
             rows = read_before_code.select_rows(
                 response.get("results") or [], query_tokens, MAX_RESULTS)
@@ -263,7 +260,7 @@ def evaluate(data):
         return _context(
             "BOSWELL MEMORY for this turn — retrieved automatically from the "
             "prompt, before you reasoned about it. These are stored claims "
-            "about Steve's systems, each frozen at the moment it was recorded — "
+            "about tenant or project state, each frozen when it was recorded — "
             "CHECK THE `age` FIELD. An old row is a claim about the past, not "
             "current fact, and may since have been superseded by work these "
             "results do not include. Prefer a recent row over an old one, "

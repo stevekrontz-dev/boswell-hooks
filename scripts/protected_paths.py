@@ -3,7 +3,7 @@
 PreToolUse handler. DENIES a write to a path the project has declared
 irreplaceable, on BOTH the file-mutation tools and Bash.
 
-WHY THIS EXISTS (M5 session a214e3fa, 2026-08-07, in that instance's own words):
+WHY THIS EXISTS:
 
     "The worst mistake I made tonight was writing a script to re-download 41
      source files. It would have replaced your *edited* cuts with full-length
@@ -238,7 +238,7 @@ def evaluate(data):
                 "pinned to.\n\n"
                 "Do not work around this by renaming, writing to a temp path "
                 "and moving it, or asking a script to do it. If replacing it is "
-                "genuinely correct, say so to Steve and let him unblock it, and "
+                "genuinely correct, say so to the user and let them unblock it, and "
                 "regenerate whatever was pinned to it in the same breath."
             )
         return None

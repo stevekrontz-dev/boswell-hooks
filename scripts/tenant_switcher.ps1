@@ -3,7 +3,7 @@ param(
     [ValidateSet('list', 'verify', 'startup', 'search', 'add')]
     [string]$Action = 'verify',
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
-    [string]$Tenant = 'main',
+    [string]$Tenant,
     [string]$Query,
     [ValidateRange(1, 20)]
     [int]$Limit = 5,
@@ -19,17 +19,8 @@ $ApiBase = if ($env:BOSWELL_API_BASE) {
 } else {
     'https://v3.askboswell.com'
 }
-$CanonicalTenantIds = @{
-    'main' = '00000000-0000-0000-0000-000000000001'
-    'tint-atlanta' = '51ac2193-9dd2-4cf3-9232-38bf6b555640'
-    'henry' = '74092d71-cc85-41d4-b4ac-5635478622d8'
-}
-
 function Get-ExpectedTenantId([string]$Name) {
-    if ($ExpectedTenantId) {
-        return $ExpectedTenantId
-    }
-    $CanonicalTenantIds[$Name]
+    $ExpectedTenantId
 }
 
 function Get-ProfilePath([string]$Name) {
@@ -77,7 +68,6 @@ function Get-TenantIdentity([string]$Name, [string]$Key) {
         Profile = $Name
         TenantId = $branches[0].tenant_id
         BranchCount = $branches.Count
-        HasWren = [bool]($branches.name -contains 'wren')
         Branches = $branches
     }
 }
@@ -98,6 +88,19 @@ if ($Action -eq 'list') {
     return
 }
 
+if (-not $Tenant) {
+    $Tenant = $env:BOSWELL_TENANT
+}
+if (-not $Tenant) {
+    $defaultFile = Join-Path $BoswellRoot 'default_tenant'
+    if (Test-Path -LiteralPath $defaultFile) {
+        $Tenant = (Get-Content -Raw -LiteralPath $defaultFile).Trim()
+    }
+}
+if (-not $Tenant -or $Tenant -notmatch '^[A-Za-z0-9_-]+$') {
+    throw 'Select a tenant with -Tenant, BOSWELL_TENANT, or ~/.boswell/default_tenant.'
+}
+
 if ($Action -eq 'add') {
     if (-not $FromClipboard) {
         throw 'Use -FromClipboard so tenant credentials never appear in command arguments.'
@@ -114,7 +117,7 @@ if ($Action -eq 'add') {
         Remove-Item -LiteralPath (Get-ProfilePath $Tenant) -Force
         throw "Credential resolved to tenant $($identity.TenantId), not $expected; profile removed."
     }
-    $identity | Select-Object Profile, TenantId, BranchCount, HasWren
+    $identity | Select-Object Profile, TenantId, BranchCount
     return
 }
 
@@ -126,18 +129,20 @@ if ($expected -and $identity.TenantId -ne $expected) {
 }
 
 Write-Host (
-    "BOSWELL TENANT: {0} | {1} | {2} branches | Wren={3}" -f
-    $identity.Profile, $identity.TenantId, $identity.BranchCount, $identity.HasWren
+    "BOSWELL TENANT: {0} | {1} | {2} branches" -f
+    $identity.Profile, $identity.TenantId, $identity.BranchCount
 )
 
 switch ($Action) {
     'verify' {
-        $identity | Select-Object Profile, TenantId, BranchCount, HasWren
+        $identity | Select-Object Profile, TenantId, BranchCount
     }
     'startup' {
         $startup = Invoke-Boswell GET (
             '/v2/startup?verbosity=warm&agent_id=' +
-            [uri]::EscapeDataString("Codex-$Tenant")
+            [uri]::EscapeDataString('Codex') +
+            '&timezone=' +
+            [uri]::EscapeDataString($(if ($env:BOSWELL_TIMEZONE) { $env:BOSWELL_TIMEZONE } else { 'UTC' }))
         ) $profileKey
         [pscustomobject]@{
             Profile = $Tenant
@@ -145,7 +150,7 @@ switch ($Action) {
             Identity = $startup.sacred_manifest.identity
             Mission = $startup.sacred_manifest.mission
             RecentMessages = @($startup.recent_thread | Select-Object -First 8 -ExpandProperty message)
-            BootloaderMessages = @($startup.wren_bootloader | Select-Object -First 3 -ExpandProperty message)
+            BehavioralContext = @($startup.behavioral_context | Select-Object -First 3 -ExpandProperty message)
         }
     }
     'search' {

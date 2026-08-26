@@ -48,7 +48,7 @@ def run_checks():
     print("python", sys.version.split()[0], "|", sys.platform)
 
     # --- path handling ------------------------------------------------------
-    terms = rbc._path_terms("/Users/henry/projects/upshift/scrapers/vendor_feed.py")
+    terms = rbc._path_terms("/Users/example/projects/upshift/scrapers/vendor_feed.py")
     ok("vendor" in terms and "feed" in terms, "POSIX path terms -> %s" % terms)
 
     # --- creation detection + sibling listing -------------------------------

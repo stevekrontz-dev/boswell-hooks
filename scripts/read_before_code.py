@@ -5,13 +5,13 @@ NotebookEdit). It does NOT block. When a mutation is about to land on a file the
 session has no Boswell evidence for, this hook runs the search ITSELF against
 /v2/search and returns the hits as `additionalContext`, then gets out of the way.
 
-WHY INJECTION AND NOT A REMINDER (Steve, 2026-08-04):
+WHY INJECTION AND NOT A REMINDER:
   * A per-turn "remember to grok before coding" banner is precisely the thing
-    the tenant's STRUCTURAL-NOT-ASPIRATIONAL commitment forbids — "never
-    delegated to the model via context markers it will ignore." A fixed string
+    structural hook design avoids because a fixed context marker will be
+    ignored. A fixed string
     becomes wallpaper within a handful of turns and measurably changes nothing.
-  * A hard DENY taxes legitimate work and puts a permission prompt in front of
-    Steve, violating DONT-HAND-STEVE-CEREMONY (zero-cost-to-Steve guardrails).
+  * A hard DENY taxes legitimate work and puts recurring ceremony in front of
+    the user.
   * Carrying the memory into the window requires no cooperation from the model.
     The stored state is simply present before the edit exists. That is the only
     version of this that survives an agent which forgets to ask.
@@ -100,11 +100,16 @@ EXCLUDED_TYPES = {"credential", "sacred_manifest", "skill", "task", "transcript"
 
 # Path noise that carries no project identity and would poison the query.
 _PATH_STOP = {
-    "users", "home", "steve", "projects", "src", "lib", "app", "scripts",
+    "users", "home", "projects", "src", "lib", "app", "scripts",
     "node_modules", "dist", "build", "test", "tests", "temp", "tmp", "claude",
     "documents", "desktop", "appdata", "local", "roaming", "python", "site",
     "packages", "index", "main", "utils", "common", "config",
 }
+_PATH_STOP.update(
+    token.lower()
+    for part in Path.home().parts
+    for token in re.findall(r"[A-Za-z0-9]+", part)
+)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _HEXCHARS = frozenset("0123456789abcdef")
 
@@ -122,7 +127,7 @@ def _is_hashy(tok):
     return bool(set(tok) <= _HEXCHARS and any(c.isdigit() for c in tok))
 
 # Grounding thresholds, CHOSEN BY MEASUREMENT not intuition (2026-08-04, swept
-# against 8 real prompts from Steve's own session):
+# against eight real prompts from an evaluation session):
 #   strong>=8 / overlap>=2 -> let a BIOGRAPHY row about an insurance gap through
 #                             on "is that the right method of action here?"
 #   strong>=8 / overlap>=3 -> killed that noise but went SILENT on "check all
@@ -187,7 +192,7 @@ def _target_path(tool_input):
 def _path_terms(target):
     """Distinctive terms from a path: the file stem plus meaningful ancestors.
 
-    'C:/Users/Steve/plugins/boswell-hooks/scripts/git_guard.py'
+    '/Users/example/plugins/boswell-hooks/scripts/git_guard.py'
         -> ['git', 'guard', 'boswell', 'hooks', 'plugins']
 
     Ancestors are walked NEAREST-FIRST: the directory immediately containing
@@ -232,15 +237,15 @@ def _sibling_names(target, limit=24):
 
     This is injected as DATA, not folded into the search query. Measured
     2026-08-06: widening the Boswell query with sibling-derived TERMS does not
-    work. The ruling that should have stopped windshield-tint.php (c235f94,
-    "why did you build a whole page to do the same exact thing the quote system
+    work. A ruling that should have stopped quote-detail.php ("why did you
+    build a whole page to do the same exact thing the quote system
     does") does not appear in the top 50 for ANY path-derived query — it shares
-    almost no vocabulary with "windshield tint". Retrieval cannot be relied on
+    almost no vocabulary with "quote detail". Retrieval cannot be relied on
     to answer "does this already exist"; the directory listing can, and it is
     always correct.
 
-    A model about to create windshield-tint.php next to get-quote.php,
-    film-removal.php, flat-glass-quote.php and protection.php does not need to
+    A model about to create quote-detail.php next to get-quote.php,
+    quote-form.php, quote-summary.php and pricing.php does not need to
     be told to think architecturally. It needs to be shown the four files it is
     about to duplicate. That is a fact it does not have, cheaply obtained.
 
@@ -338,7 +343,7 @@ def _age(created_at):
 # is not mine to widen.
 # CAREFUL: "generic" means generic IN THIS TENANT, not in English. A first cut
 # of this list included machine/install/version/current/running and immediately
-# broke "check all the boswell hooks on this machine" — in Steve's domain a
+# broke "check all the boswell hooks on this machine" — in this domain a
 # machine is a fleet box, an install is a plugin deployment, and a version is
 # the thing the whole fleet audit turns on. Only words that can never name an
 # entity here belong below.
@@ -462,7 +467,7 @@ def _content_truncated(item):
     That matters because grounding re-judges relevance from the text it can
     see, while the SEARCH matched against the full indexed record. A row can
     therefore rank #0 on a word that is not in the fragment at all. Live case:
-    the restated quote-architecture ruling (4bbedc24) ranked #0 for "couldnt
+    the restated quote-architecture ruling ranked #0 for "couldnt
     book just a front windshield" because its `symptom` field says exactly
     that — and `symptom` sorts alphabetically past the preview cutoff, so the
     grounding gate saw no "windshield" anywhere and refused the single most
@@ -510,12 +515,12 @@ def select_rows(results, query_tokens, max_results=MAX_RESULTS):
     """Pick the BEST admitted rows, not the shallowest ones.
 
     WHY THIS EXISTS (backtested 2026-08-06 over 7 documented failures spanning
-    pricing, trading, ML training, repo hygiene, secrets and the tint quote
+    pricing, trading, ML training, repo hygiene, secrets and a quote
     funnel): the governing memory was inside the top 50 for 5 of the 7, but
     reached the model for only 3. The two that were found and dropped were the
-    worktree-merge-debt post-mortem at rank 19 and Steve's June credential
+    worktree-merge-debt post-mortem at rank 19 and a credential
     ruling at rank 34 — the exact decision whose absence had already caused
-    "I re-opened it twice" (c56a374b).
+    the decision was repeatedly reopened.
 
     They were dropped because the caller walked the results in RANK order and
     stopped at the first three that passed the gate, so three shallow,
@@ -620,8 +625,8 @@ def _slim(item, rank, query_tokens=None):
         "commit": str(item.get("commit_hash") or "")[:12],
         "content_type": item.get("content_type"),
         "match": score,
-        # created_at is carried DELIBERATELY (added 2026-08-04 after Steve
-        # asked). Every retrieved row is a claim frozen at a moment, and an
+        # created_at is carried deliberately. Every retrieved row is a claim
+        # frozen at a moment, and an
         # undated claim reads as current fact. On 2026-08-04 retrieval ranked a
         # 40-minute-old, already-corrected fleet audit at #1 with nothing in the
         # payload to signal it was stale — the model had no way to discount it.
@@ -667,12 +672,12 @@ def evaluate(data):
         # a way to do it" — a question no amount of reading about the SUBJECT
         # can answer, because the answer lives in the codebase's conventions.
         #
-        # Measured failure (session 615d701f): a dozen Boswell searches on
-        # "windshield"/"tint" satisfied _has_evidence, so the creation of a new
-        # top-level windshield-tint.php was memo'd SILENTLY. Boswell already
+        # Measured failure: a dozen Boswell searches on
+        # "quote"/"detail" satisfied _has_evidence, so the creation of a new
+        # top-level quote-detail.php was memo'd silently. Boswell already
         # held the ruling (c235f94, "why did you build a whole page to do the
         # same exact thing the quote system does") and the model never saw it.
-        # The page was built, reviewed by Steve, and thrown away.
+        # The page was built, reviewed, and thrown away.
         #
         # So on a creation: topical evidence does not license a new surface,
         # and the query is widened with the neighbours that define what this
@@ -749,9 +754,9 @@ if __name__ == "__main__":
     # Offline self-test of the pure helpers (no network).
     print("path term extraction:")
     for sample in (
-        r"C:\Users\Steve\plugins\boswell-hooks\scripts\git_guard.py",
-        r"C:\Users\Steve\Projects\tintatlanta\crm\inbox.php",
-        "/home/steve/agents/foreman.py",
+        r"C:\Users\Example\plugins\boswell-hooks\scripts\git_guard.py",
+        r"C:\Users\Example\Projects\sample-crm\inbox.php",
+        "/home/example/agents/foreman.py",
     ):
         print(f"  {sample}\n    -> {_path_terms(sample)}")
     print("\ntool routing:")

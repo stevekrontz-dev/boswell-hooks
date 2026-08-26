@@ -245,9 +245,9 @@ def flush_pending_transcripts():
     if not pending:
         return (0, 0)
     try:
-        import boswell
+        import boswell_client
     except Exception as e:
-        log(f"flush: boswell import failed: {e}")
+        log(f"flush: Boswell client import failed: {e}")
         return (0, len(pending))
 
     survivors, committed = [], 0
@@ -258,17 +258,22 @@ def flush_pending_transcripts():
             continue  # malformed entry → drop silently
         machine = card.get("machine", MACHINE_NAME)
         fp = (card.get("first_prompt") or "").replace("\n", " ")[:80]
-        ok, info = boswell.commit_memory(
-            branch=BOSWELL_BRANCH,
-            content=card,
-            content_type="transcript",
-            message=f"TRANSCRIPT: {sid[:8]} ({machine}, "
-                    f"{card.get('message_count', '?')} msgs) — {fp}",
-            tags=["transcript", "cc-session", machine],
-        )
+        try:
+            info = boswell_client.commit(
+                branch=BOSWELL_BRANCH,
+                content=card,
+                content_type="transcript",
+                message=f"TRANSCRIPT: {sid[:8]} ({machine}, "
+                        f"{card.get('message_count', '?')} msgs) — {fp}",
+                tags=["transcript", "cc-session", machine],
+            )
+            ok = True
+        except Exception as exc:
+            ok, info = False, type(exc).__name__
         if ok:
             committed += 1
-            log(f"flush: committed {sid[:8]} -> {str(info)[:12]}")
+            commit_hash = info.get("commit_hash", "") if isinstance(info, dict) else ""
+            log(f"flush: committed {sid[:8]} -> {commit_hash[:12]}")
         else:
             survivors.append(entry)
             log(f"flush: retained {sid[:8]} ({info})")
@@ -278,21 +283,16 @@ def flush_pending_transcripts():
 
 
 def check_pending():
-    """Drain the queue in Python first; only emit the LLM-fallback marker if
-    commits failed (e.g. no `bos_` key yet) and entries remain."""
-    committed, remaining = flush_pending_transcripts()
+    """Drain the queue and return one startup notice if entries remain."""
+    _committed, remaining = flush_pending_transcripts()
     if remaining <= 0:
-        return
+        return None
     queue_file = _queue_path()
-    print(f"\n<!-- PENDING_TRANSCRIPTS: {remaining} -->")
-    print("Claude Code: Python flush could not commit these (missing/invalid "
-          "hook API key or network). Fallback - process them via MCP:")
-    print(f"Queue file: {queue_file}")
-    print("For each entry, call boswell_commit with branch='transcripts',")
-    print("content=entry['index_card'], content_type='transcript',")
-    print(f"tags=['transcript','cc-session','{MACHINE_NAME}'].")
-    print("Then remove committed entries from the queue file.")
-    print("<!-- END_PENDING_TRANSCRIPTS -->\n")
+    return (
+        f"BOSWELL TRANSCRIPT QUEUE: {remaining} item(s) remain at {queue_file}. "
+        "Automatic upload could not authenticate or reach Boswell; preserve the "
+        "queue and repair the tenant credential or connection before discarding it."
+    )
 
 
 if __name__ == "__main__":
