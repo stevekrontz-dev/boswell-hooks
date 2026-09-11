@@ -340,6 +340,55 @@ class CodexHookTests(unittest.TestCase):
         }))
         self.assertTrue(session_state.load("recovered")["startup_loaded"])
 
+    def test_claude_post_tool_feeds_the_ledger_the_corrective_gate_reads(self):
+        # 2026-09-11: Claude's PreToolUse runs this module's corrective check,
+        # but Claude's PostToolUse fed only readstate, so boswell_read_tokens
+        # stayed empty and EVERY corrective commit from Claude Code was refused
+        # no matter how much the agent had read. Gate and evidence must share
+        # one ledger — prove it through the real Claude adapter.
+        import importlib.util
+        import os
+        with mock.patch.dict(os.environ):
+            spec = importlib.util.spec_from_file_location(
+                "claude_dispatcher_under_test", SCRIPTS / "dispatcher.py")
+            claude = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(claude)
+        session_state.save_startup_cache("c1", self.startup_payload())
+        commit = {
+            "session_id": "c1",
+            "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+            "tool_input": {
+                "message": "CORRECTS fleet hooks record: railway endpoint residue",
+                "content": {"finding": "hooks defaulted to the railway endpoint"},
+            },
+        }
+        denied = dispatcher._pre_tool(commit)
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+
+        # Keep the Claude-side ledgers off the real ~/.claude state tree.
+        with mock.patch("readstate.record"), \
+                mock.patch("empty_result.evaluate", return_value=None), \
+                mock.patch("hook_health.note_ok"), \
+                mock.patch("hook_health.note_error"):
+            claude._post_tool({
+                "session_id": "c1",
+                "tool_name": "mcp__Boswell-Atlas__boswell_recall",
+                "tool_input": {"commit": "5c5a41a7"},
+                "tool_response": "FLEET HOOKS record: railway endpoint residue on fleet hooks",
+            })
+
+        self.assertIsNone(dispatcher._pre_tool(commit))
+
+    def test_record_read_ignores_non_read_tools(self):
+        # A Bash call that merely prints the right words is not a Boswell read.
+        session_state.save("c2", {})
+        dispatcher.record_read({
+            "session_id": "c2", "tool_name": "Bash",
+            "tool_input": {"command": "echo railway endpoint residue"},
+            "tool_response": "railway endpoint residue",
+        })
+        self.assertFalse(session_state.load("c2").get("boswell_read_tokens"))
+
     def test_postcompact_validates_cache_without_injecting_context(self):
         session_state.save_startup_cache("long-session", self.startup_payload())
 

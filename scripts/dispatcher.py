@@ -152,6 +152,12 @@ def _post_tool(data):
     # corrective write — the gate would exist but never fire.
     import readstate
     _safe(readstate.record, data)
+    # ...and into the SEPARATE ledger the shared continuity lane checks. Since
+    # v2.2.0 Claude's PreToolUse runs codex_dispatcher._pre_tool first, whose
+    # corrective check reads session_state["boswell_read_tokens"], which nothing
+    # on the Claude side ever wrote — so every corrective commit was refused.
+    import codex_dispatcher
+    _safe(codex_dispatcher.record_read, data)
     # PostToolUse may also return additionalContext. The "only PreToolUse and
     # Stop may emit" line in this module's docstring is a June artifact that
     # UserPromptSubmit already disproved when prompt_retrieval began injecting

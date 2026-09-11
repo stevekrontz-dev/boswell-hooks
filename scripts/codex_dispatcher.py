@@ -543,6 +543,36 @@ def _response_text(data: dict) -> str:
     return ""
 
 
+def _add_read_tokens(state: dict, data: dict) -> None:
+    """Fold one Boswell read into the corrective-gate evidence ledger, in place."""
+    if not READ_TOOL_RE.search(_tool_name(data)):
+        return
+    evidence = json.dumps(_tool_input(data), ensure_ascii=False) + " " + _response_text(data)
+    tokens = set(state.get("boswell_read_tokens") or [])
+    tokens.update(session_state.tokens(evidence))
+    state["boswell_read_tokens"] = sorted(tokens)[:1000]
+
+
+def record_read(data: dict) -> None:
+    """Record a Boswell read for a runtime whose PostToolUse is not _post_tool.
+
+    The Claude adapter runs this module's _pre_tool first (the shared continuity
+    lane), and that lane includes the corrective-write check against
+    boswell_read_tokens. But Claude's PostToolUse fed only readstate, a separate
+    ledger, so boswell_read_tokens stayed empty for the whole session and EVERY
+    corrective boswell_commit from Claude Code was refused, however much the
+    agent had read first. Found 2026-09-11 when a fleet-sync correction could not
+    be committed after three reads. The gate and its evidence must come from the
+    same ledger.
+    """
+    if not READ_TOOL_RE.search(_tool_name(data)):
+        return
+    sid = data.get("session_id")
+    state = session_state.load(sid)
+    _add_read_tokens(state, data)
+    session_state.save(sid, state)
+
+
 def _post_tool(data: dict) -> None:
     sid = data.get("session_id")
     state = session_state.load(sid)
@@ -553,11 +583,7 @@ def _post_tool(data: dict) -> None:
         mutations = list(state.get("mutations") or [])
         mutations.append({"tool": tool, "path": inp.get("path") or inp.get("file_path"), "at": now})
         state["mutations"] = mutations[-200:]
-    if READ_TOOL_RE.search(tool):
-        evidence = json.dumps(inp, ensure_ascii=False) + " " + _response_text(data)
-        tokens = set(state.get("boswell_read_tokens") or [])
-        tokens.update(session_state.tokens(evidence))
-        state["boswell_read_tokens"] = sorted(tokens)[:1000]
+    _add_read_tokens(state, data)
     if tool in {"Bash", "shell_command"}:
         command = str(inp.get("command") or "")
         response = _response_text(data)
