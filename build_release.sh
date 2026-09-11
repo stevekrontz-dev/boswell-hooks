@@ -23,7 +23,7 @@ mkdir -p "$STAGE/scripts" "$STAGE/hooks" "$STAGE/.claude-plugin" "$STAGE/tests" 
 
 cp claude/.claude-plugin/plugin.json "$STAGE/.claude-plugin/"
 cp claude/hooks/hooks.json           "$STAGE/hooks/"
-cp INSTALL.md CODEX.md LICENSE "$STAGE/"
+cp INSTALL.md AGENT-INSTALL.md CODEX.md LICENSE "$STAGE/"
 
 # Runtime dependency closure for the Claude artifact. Keep this explicit: a
 # repository utility or historical experiment must not silently become shipped
@@ -90,8 +90,19 @@ find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null |
 find "$STAGE" -name '*.py[co]' -delete 2>/dev/null || true
 
 # Normalise to LF. The source lives on Windows checkouts; the target is a Mac.
+# Python, not `sed -i`: GNU sed takes -i bare, BSD sed (macOS) needs -i '' —
+# the GNU form aborted the first build cut from a Mac (v2.2.1) with
+# "invalid command code", after the tests had already passed.
 find "$STAGE" -type f \( -name '*.py' -o -name '*.json' -o -name '*.md' \) \
-  -exec sed -i 's/\r$//' {} +
+  -exec python - {} + <<'EOF'
+import sys
+for path in sys.argv[1:]:
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if b"\r" in data:
+        with open(path, "wb") as fh:
+            fh.write(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+EOF
 
 # Refuse to ship a key. This has never fired; it is here so it can.
 if grep -rIqE 'bos_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY' "$STAGE"; then

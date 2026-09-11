@@ -14,7 +14,7 @@ class PublicReleaseTests(unittest.TestCase):
         claude = json.loads(
             (ROOT / "claude" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(codex["version"], "2.2.0")
+        self.assertEqual(codex["version"], "2.2.1")
         self.assertEqual(claude["version"], codex["version"])
 
     def test_public_runtime_and_docs_are_tenant_neutral(self):

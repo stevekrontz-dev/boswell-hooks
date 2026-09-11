@@ -54,6 +54,10 @@ The packaged Claude artifact has a flat layout containing
 `.claude-plugin/`, `hooks/`, `scripts/`, and the public documentation.
 Reload plugins and begin a new session after installing an update.
 
+If an agent is doing the install, hand it `AGENT-INSTALL.md` from the zip:
+it carries the preflight, the unzip target, the verification commands, and
+the rollback as a procedure.
+
 ## Configuration
 
 | Variable | Default | Purpose |
