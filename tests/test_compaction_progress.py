@@ -114,6 +114,53 @@ def test_rejected_prompt_does_not_consume_undelivered_progress(lab,blocked):
     assert dispatcher._recover_progress(lab,'UserPromptSubmit',None)['hookSpecificOutput']['additionalContext']
 
 
+def test_wrong_host_path_resolves_only_unique_verified_session_transcript(lab,tmp_path,monkeypatch):
+    import compaction_progress as progress
+    root=tmp_path/'codex';target=root/'sessions/2026/09/23/rollout-test-session-a.jsonl'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(Path(lab['transcript_path']).read_bytes())
+    foreign=tmp_path/'foreign.jsonl'
+    foreign.write_text(json.dumps({'type':'session_meta','payload':{'id':'other'}})+'\n',encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME',str(root))
+    record=progress.collect({**lab,'transcript_path':str(foreign)})
+    assert record['source']['transcript_path']==str(target)
+    assert record['session_id']=='session-a'
+
+
+def test_failed_capture_does_not_poison_work_without_a_later_compaction(lab):
+    import compaction_progress as progress
+    path=progress._paths(lab['session_id'])[0]
+    progress._write(path,{'session_id':lab['session_id'],'failure':'Transcript belongs to another session'})
+    assert dispatcher._recover_progress(lab,'PreToolUse',None) is None
+    saved=progress._read(path)
+    assert saved['restored'] is False and saved['record']['session_id']=='session-a'
+
+
+def test_failed_capture_reconstructed_before_confirmed_compaction_not_after_it(lab):
+    import compaction_progress as progress
+    path=progress._paths(lab['session_id'])[0]
+    progress._write(path,{'session_id':lab['session_id'],'failure':'Transcript belongs to another session','failed_at':0})
+    with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps({'type':'compacted','timestamp':'2026-09-23T22:44:54Z','payload':{}})+'\n')
+        stream.write(json.dumps({'type':'response_item','payload':{'type':'message','role':'user','content':'AFTER BOUNDARY NEW REQUEST'}})+'\n')
+    result=dispatcher._recover_progress(lab,'PreToolUse',None)
+    assert 'BOSWELL COMPACTION PROGRESS' in result['hookSpecificOutput']['additionalContext']
+    assert 'AFTER BOUNDARY NEW REQUEST' not in result['hookSpecificOutput']['additionalContext']
+
+
+def test_forked_rollout_accepts_declared_ancestor_metadata_only(lab):
+    import compaction_progress as progress
+    rows=history()
+    rows[0]['payload']['forked_from_id']='parent-session'
+    rows.insert(1,{'type':'session_meta','payload':{'id':'parent-session'}})
+    path=Path(lab['transcript_path'])
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8')
+    assert progress.collect(lab)['session_id']=='session-a'
+    rows[1]['payload']['id']='unrelated-session'
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows),encoding='utf-8')
+    with pytest.raises(ValueError,match='another session'):progress.collect(lab)
+
+
 def test_completed_handoff_restored_as_completed_without_reassignment(lab):
     dispatcher._pre_compact(lab)
     with mock.patch.object(dispatcher.boswell_client,'startup') as startup:

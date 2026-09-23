@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import time
@@ -105,14 +106,42 @@ def _write(path,value):
             os.unlink(name)
 
 
-def collect(data):
+def _first_codex_id(path):
+    with Path(path).open('rb') as stream:
+        raw=stream.readline(MAX_LINE+1)
+    if len(raw)>MAX_LINE:raise ValueError('Transcript event exceeds bounded progress scan')
+    try:row=json.loads(raw)
+    except ValueError:return None
+    return (row.get('payload') or {}).get('id') if isinstance(row,dict) and row.get('type')=='session_meta' else None
+
+
+def _source(data):
+    source=Path(data['transcript_path'])
+    expected=data['session_id']
+    observed=_first_codex_id(source)
+    if observed is None or observed==expected:return source
+    # Some resumed host callbacks supply another thread's rollout path. Never
+    # relax identity: resolve only a unique exact-id file in the host's store.
+    if not re.fullmatch(r'[A-Za-z0-9_-]+',expected):
+        raise ValueError('Transcript belongs to another session')
+    root=Path(os.environ.get('CODEX_HOME') or Path.home()/'.codex')/'sessions'
+    matches=[p for p in root.glob('**/rollout-*-'+expected+'.jsonl')
+             if p.is_file() and _first_codex_id(p)==expected]
+    if len(matches)!=1:raise ValueError('Transcript belongs to another session; no unique verified source')
+    return matches[0]
+
+
+def collect(data, *, max_bytes=None):
     sid=data.get('session_id')
     if not sid or not data.get('transcript_path'):
         raise ValueError('Progress checkpoint requires session and transcript')
-    source=Path(data['transcript_path'])
+    source=_source(data)
     size=source.stat().st_size
     if size>MAX_SOURCE:
         raise ValueError('Transcript exceeds bounded progress scan')
+    if max_bytes is not None:
+        if type(max_bytes) is not int or not 0<=max_bytes<=size:raise ValueError('Invalid reconstruction boundary')
+        size=max_bytes
     record={'contract':'compaction-progress-v1','session_id':sid,'continuation_rules':RULES,
         'objective':{'text':'Active objective not structurally recorded; reconcile the latest request with the last stated work.', 'status':'unconfirmed'},
         'next_action':{'text':'Reconcile the last stated work and observed receipts before choosing the next action.', 'status':'unconfirmed'},
@@ -121,6 +150,7 @@ def collect(data):
     digest=hashlib.sha256()
     offset=0
     session_verified=False
+    ancestors=set()
     calls={}
     progress_offset=-1
     latest_work_offset=-1
@@ -217,11 +247,18 @@ def collect(data):
                 continue
             payload=row.get('payload') or {}
             event_timestamp=row.get('timestamp')
+            if row.get('type')=='compacted':
+                record['last_compaction']={'offset':offset,'timestamp':event_timestamp}
             if event_timestamp:
                 record['time_context']['last_event_at']=event_timestamp
             if row.get('type')=='session_meta':
                 if payload.get('id')!=sid:
-                    raise ValueError('Transcript belongs to another session')
+                    if not session_verified or payload.get('id') not in ancestors:
+                        raise ValueError('Transcript belongs to another session')
+                    if payload.get('forked_from_id'):ancestors.add(payload['forked_from_id'])
+                    offset+=len(raw)
+                    continue
+                if payload.get('forked_from_id'):ancestors.add(payload['forked_from_id'])
                 session_verified=True
                 record['time_context']['session_started_at']=payload.get('timestamp') or event_timestamp
             # Claude records session identity on each message.
@@ -284,6 +321,8 @@ def collect(data):
     if not session_verified:
         raise ValueError('Cannot verify transcript session identity')
     record['source']={'transcript_path':str(source),'bytes':offset,'sha256':digest.hexdigest()}
+    if Path(data['transcript_path']).resolve()!=source.resolve():
+        record['source']['supplied_transcript_path']=data['transcript_path']
     record['time_context']['captured_at']=datetime.now(timezone.utc).isoformat()
     record['time_context']['elapsed_time_is_not_work_time']=True
     record.setdefault('root_objective',dict(record['objective']))
@@ -305,7 +344,8 @@ def prepare(data):
         try:
             record=collect(data)
         except Exception as exc:
-            _write(path,{'session_id':data['session_id'],'failure':str(exc)[:300]})
+            _write(path,{'session_id':data['session_id'],'failure':str(exc)[:300],
+                'failed_at':time.time(),'requested_transcript_path':data.get('transcript_path')})
             raise
         previous=_read(path)
         if previous and previous.get('record',{}).get('checkpoint_id')==record['checkpoint_id']:
@@ -331,7 +371,7 @@ def _compacted_after(record, data):
     """Require an append-only host boundary after this captured source prefix."""
     source=record['source']
     path=Path(source['transcript_path'])
-    if not data.get('transcript_path') or Path(data['transcript_path']).resolve()!=path.resolve():
+    if not data.get('transcript_path') or _source(data).resolve()!=path.resolve():
         return False
     size=path.stat().st_size
     captured=source['bytes']
@@ -366,7 +406,25 @@ def restore(data, *, consume=True, after_compaction=False, max_context=MAX_CONTE
             if after_compaction:return None
             raise ValueError('Progress checkpoint is missing; recover current work from transcript evidence and existing agent ownership before continuing')
         if saved.get('failure'):
-            raise ValueError('Progress capture failed: '+saved['failure'])
+            if saved.get('session_id')!=data['session_id']:
+                raise ValueError('Failed progress checkpoint session mismatch')
+            if not after_compaction:
+                raise ValueError('Progress capture failed: '+saved['failure'])
+            # Retry capture from verified host evidence, never reuse the prior
+            # invalidated checkpoint. If compaction actually followed failure,
+            # reconstruct its pre-boundary prefix; otherwise remain pending.
+            failed_at=saved.get('failed_at',path.stat().st_mtime)
+            recovered=collect(data)
+            boundary=recovered.get('last_compaction')
+            if boundary:
+                stamp=boundary.get('timestamp')
+                if not isinstance(stamp,str):raise ValueError('Compaction boundary has no timestamp')
+                occurred=datetime.fromisoformat(stamp.replace('Z','+00:00')).timestamp()
+                if occurred>=failed_at:
+                    recovered=collect(data,max_bytes=boundary['offset'])
+            saved={'record':recovered,'record_sha256':_sha(_json(recovered).encode()),'restored':False,
+                'reconstructed_after_failure':{'reason':saved['failure'],'failed_at':failed_at}}
+            _write(path,saved)
         record=saved.get('record')
         if (not isinstance(record,dict) or record.get('session_id')!=data['session_id']
             or saved.get('record_sha256')!=_sha(_json(record).encode())):

@@ -60,6 +60,15 @@ it. Existing tool denials and context are preserved. Bounded callback traces
 record entry/result status without prompt text or tool arguments. This fallback
 does not guarantee injection before an answer that uses no tools or user turn.
 
+A mismatched Codex path may resolve only to a unique exact-session rollout in
+the configured host session store, with a matching primary metadata identity.
+Declared fork ancestors may appear as copied metadata; unrelated identities
+remain errors. Failed capture records retain their timestamp and supplied path.
+Recovery retries against verified transcript evidence, never an invalidated old
+checkpoint. A confirmed later compaction reconstructs only its preceding
+prefix. If the failed capture never compacted, a fresh checkpoint stays pending
+and ordinary tools are not indefinitely blocked by the old failure.
+
 The injected view is capped at 8,500 characters. Repeated citations and excerpts
 use shared references and request rows declare their columns and response-only
 status. This reduction precedes omission of optional operation receipts; agent
