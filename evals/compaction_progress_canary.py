@@ -1,6 +1,6 @@
 """Context-use canary, not a claim that a live host compaction occurred.
 
-Real CLI models consume the actual shared PostCompact output. No tools, live
+Real CLI models consume the actual shared SessionStart compact output. No tools, live
 memory, hooks, or production persistence are available in these subprocesses.
 """
 import argparse
@@ -35,7 +35,8 @@ def main():
     with mock.patch.object(session_state,'STATE_ROOT',args.output/'state'),mock.patch.object(dispatcher.transcript_spool,'capture'):
         session_state.save_startup_cache('session-a',{'sacred_manifest':{}})
         dispatcher._pre_compact(data)
-        context=dispatcher._post_compact(data)['hookSpecificOutput']['additionalContext']
+        assert dispatcher._post_compact(data) is None
+        context=dispatcher._session_start({**data,'source':'compact'})['hookSpecificOutput']['additionalContext']
         assert dispatcher._post_compact(data) is None
     (args.output/'emitted-context.txt').write_text(context,encoding='utf-8')
     prompt=('Continue. For this diagnostic, state your next action as JSON only with fields '

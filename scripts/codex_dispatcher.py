@@ -765,7 +765,14 @@ def _post_compact(data: dict) -> dict | None:
     cached = session_state.load_startup_cache(data.get("session_id"))
     if not cached:
         return _stop("Boswell orientation cache is missing after compaction.")
-    return _restore_progress(data, "PostCompact")
+    # PostCompact cannot deliver additionalContext. Validate without consuming;
+    # SessionStart(source=compact) owns the model-visible one-shot delivery.
+    import compaction_progress
+    try:
+        compaction_progress.restore(data, consume=False)
+    except Exception as exc:
+        return _stop(f"Boswell progress restoration failed: {exc}")
+    return None
 
 
 def _subagent_start(data: dict) -> dict | None:

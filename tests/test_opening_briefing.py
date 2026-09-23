@@ -97,8 +97,9 @@ class StartupBriefingTests(unittest.TestCase):
         if not (ROOT / ".codex-plugin").is_dir():
             self.skipTest("Flat Claude package has no Codex hook catalog")
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
-        for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostCompact"):
+        for event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             self.assertGreaterEqual(hooks[event][0]["hooks"][0].get("additionalContextLimit", 2500), 4000)
+        self.assertNotIn("additionalContextLimit", hooks["PostCompact"][0]["hooks"][0])
 
     def test_claude_budget_preserves_manifest_and_current_task(self):
         with mock.patch.object(boswell_client, "_request", side_effect=[payload(), tasks()]):

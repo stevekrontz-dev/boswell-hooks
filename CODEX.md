@@ -45,14 +45,16 @@ authorization or approval requirements. Host-generated messages, external tool
 prose, and copied compaction histories are excluded from human directions.
 Event timestamps stay separate from session start and checkpoint time.
 
-`PostCompact` or `SessionStart(source=compact)` restores the checkpoint once
-under a cross-process lock, without startup replay. The host provides no
+`PostCompact` validates without consuming the checkpoint. Only
+`SessionStart(source=compact)` restores it under a cross-process lock, without
+startup replay: Codex does not accept additional context from `PostCompact`. The host provides no
 delivery acknowledgment: marking before output prevents duplicates, but a
 process failure between that mark and delivery can lose the injection. Missing,
 invalid, over-budget, or failed checkpoints produce an explicit failure.
 
 The injected view is capped at 8,500 characters. Repeated citations and excerpts
-are compacted before optional recent-operation receipts are omitted; agent
+use shared references and request rows declare their columns and response-only
+status. This reduction precedes omission of optional operation receipts; agent
 ownership and settled request records are retained. Full captured evidence and
 source offsets/hashes remain in the checkpoint file. The collector bounds a
 scan to 512 MiB and an individual JSONL event to 8 MiB; exceeding either reports

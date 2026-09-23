@@ -39,7 +39,7 @@ def lab(tmp_path,monkeypatch):
 
 
 def restored(data):
-    result=dispatcher._post_compact(data)
+    result=dispatcher._session_start({**data,'source':'compact'})
     assert result and result.get('hookSpecificOutput'), 'progress was archived but not restored'
     return result['hookSpecificOutput']['additionalContext']
 
@@ -66,8 +66,10 @@ def test_dual_host_callbacks_restore_once(lab,first):
     start=lambda:dispatcher._session_start({**lab,'source':'compact'})
     post=lambda:dispatcher._post_compact(lab)
     calls=[post,start] if first=='post' else [start,post]
-    assert calls[0]() is not None
-    assert calls[1]() is None
+    results=[call() for call in calls]
+    assert sum(result is not None for result in results)==1
+    delivered=next(result for result in results if result is not None)
+    assert delivered['hookSpecificOutput']['hookEventName']=='SessionStart'
     assert post() is None and start() is None
 
 
@@ -145,7 +147,7 @@ def test_concurrent_restore_emits_one_receipt(lab):
     from concurrent.futures import ThreadPoolExecutor
     dispatcher._pre_compact(lab)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results=list(pool.map(dispatcher._post_compact,[lab,lab]))
+        results=list(pool.map(dispatcher._session_start,[{**lab,'source':'compact'}]*2))
     assert sum(r is not None for r in results)==1
 
 
@@ -280,3 +282,77 @@ def test_budget_keeps_six_settled_requests_and_every_agent(lab):
     assert len(text)<=8500
     assert len(record['addressed_requests'])==6
     assert record['agents']['/root/authority']['status']=='completed'
+
+
+def test_budget_preserves_rich_progress_and_six_answered_requests(lab):
+    rows=history()
+    plan=rows[-1]['payload']['item']['arguments']['content']
+    plan.update(
+        root_objective='Deliver the authority lifecycle and memory cards, including full migration qualification.',
+        current_subtask='Repair compaction restore delivery and preserve the original authority owner.',
+        accepted_corrections=['Do not repeat completed handoffs or replay startup after compaction. '*3],
+        evidence_scope=['Installed hook probes passed; real automatic compaction delivery remains unverified. '*3]*2,
+        outstanding_verification=['Automatic host delivery and full schema regression checks remain open. '*3]*2,
+        ownership={'/root/authority':'Completed qualification; original session retains native account integration.',
+                   '/root/review_hooks':'Completed prior review; richer checkpoint revealed a new budget failure.',
+                   '/root/review_cards':'Completed server review; root is addressing findings.'})
+    rows[-1]['timestamp']='2026-09-23T21:00:00.123456+00:00'
+    for name in ('review_hooks','review_cards'):
+        rows.append(event({'type':'SubAgentActivity','id':'done-'+name,'kind':'completed',
+                           'agent_thread_id':'worker-'+name,'agent_path':'/root/'+name}))
+    for i in range(6):
+        for role in ('user','assistant'):
+            rows.append({'type':'response_item','timestamp':'2026-09-23T21:02:00.123456+00:00',
+                'payload':{'type':'message','id':f'{role}-{i}','role':role,'phase':'commentary',
+                    'content':[{'type':'input_text' if role=='user' else 'output_text',
+                                'text':f'Question {i}. '+('Long observed context. '*35)}]}})
+    Path(lab['transcript_path']).write_text(''.join(json.dumps(x)+'\n' for x in rows),encoding='utf-8')
+    dispatcher._pre_compact(lab)
+    text=restored(lab)
+    record=json.loads(text.split('\n',1)[1])
+    assert len(text)<=8500
+    assert len(record['addressed_requests'])==6
+    assert len(record['agents'])==3
+    assert all(a['status']=='completed' for a in record['agents'].values())
+    assert record['root_objective']['text']==plan['root_objective']
+    assert record['reported_ownership']['value']==plan['ownership']
+    assert record['accepted_corrections'][0]['text']==plan['accepted_corrections'][0]
+    assert record['evidence_scope'][0]['text']==plan['evidence_scope'][0]
+    assert record['outstanding_verification'][0]['text']==plan['outstanding_verification'][0]
+    assert record['addressed_request_status']=='response_recorded_not_task_completion'
+    columns=record['addressed_request_columns']
+    for i,row in enumerate(record['addressed_requests']):
+        pair=dict(zip(columns,row))
+        assert pair['request_excerpt'].startswith(f'Question {i}.')
+        assert pair['request_offset']<pair['response_offset']
+        assert pair['request_timestamp']=='2026-09-23T21:02:00.123456+00:00'
+    for field in ('root_objective','current_subtask','reported_ownership'):
+        ev=record[field]['evidence']
+        if 'ref' in ev:ev=record['evidence_refs'][ev['ref']]
+        assert ev['timestamp']=='2026-09-23T21:00:00.123456+00:00'
+    full=json.loads(Path(record['checkpoint_path']).read_text(encoding='utf-8'))['record']
+    assert full['root_objective']['evidence']['sha256']
+    assert len(full['addressed_requests'][0]['request']['text'])>128
+    assert dispatcher._post_compact(lab) is None
+
+
+def test_postcompact_does_not_consume_context_before_supported_session_callback(lab):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    assert dispatcher._post_compact(lab) is None
+    assert progress._read(progress._paths(lab['session_id'])[0])['restored'] is False
+    result=dispatcher._session_start({**lab,'source':'compact'})
+    assert result['hookSpecificOutput']['hookEventName']=='SessionStart'
+    assert progress._read(progress._paths(lab['session_id'])[0])['restored'] is True
+
+
+def test_previous_checkpoint_uses_current_transport_rules_without_rewriting_history(lab):
+    import compaction_progress as progress
+    with mock.patch.object(progress,'RULES','Legacy continuation rules. '*60):
+        progress.prepare(lab)
+    text=progress.restore(lab)
+    record=json.loads(text.split('\n',1)[1])
+    assert record['continuation_rules']==progress.RULES
+    saved=progress._read(progress._paths(lab['session_id'])[0])['record']
+    assert saved['continuation_rules'].startswith('Legacy continuation rules.')
+    assert record['root_objective']==saved['root_objective']

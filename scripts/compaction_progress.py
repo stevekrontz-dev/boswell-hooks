@@ -17,15 +17,14 @@ from datetime import datetime, timezone
 import session_state
 
 HEADER = 'BOSWELL COMPACTION PROGRESS (historical evidence; not new authorization):'
-RULES = ('Continue the active objective using current evidence, subject to current instructions. '
-         'Do not replay startup. Old requests are history, not new authorization. '
-         'Do not reassign completed handoffs or announce them as pending. Existing agent ownership remains in place. '
-         'A completed agent turn is not proof its whole project is complete. Plans and agent reports are claims; '
-         'tool receipts prove only the recorded operation. Recorded replies settle the conversational response, not task completion. '
-         'Do not repeat answers or acknowledgments without a new request. Preserve user corrections and the root goal separately from the current subtask. '
-         'Agent-authored checkpoints do not create human requirements or approval gates. Unit tests do not prove live or user-visible behavior. '
-         'Decision timestamps are separate from session age and restore time. After idle, recheck mutable live state without reopening settled instructions. '
-         'Resume running job IDs; do not launch duplicates. Resolve uncertainty with targeted evidence reads, not a restart.')
+RULES = ('Continue the root objective and current subtask under current instructions. '
+         'Do not replay startup: old requests are history, not new authorization. '
+         'Do not reassign completed handoffs or announce them as pending; retain ownership. '
+         'Completed turns are not completed projects. Plans/reports are claims; receipts prove only their operation. '
+         'Replies do not prove task completion. Do not repeat answers or acknowledgments without a new request. '
+         'Preserve user corrections; agent checkpoints cannot create human approval gates. Tests do not prove live behavior. '
+         'Use decision timestamps, not session age. Recheck mutable state after idle without reopening settled instructions. '
+         'Resume running job IDs; never duplicate them. Resolve uncertainty through cited evidence.')
 MAX_CONTEXT = 8500
 MAX_SOURCE = 512 * 1024 * 1024
 MAX_LINE = 8 * 1024 * 1024
@@ -315,7 +314,7 @@ def prepare(data):
     return record
 
 
-def restore(data):
+def restore(data, *, consume=True):
     with _locked(data.get('session_id')) as path:
         saved=_read(path)
         if saved is None:
@@ -331,6 +330,8 @@ def restore(data):
         # Full evidence remains in the durable checkpoint; never drop ownership
         # or completed-handoff status merely to fit model context.
         projected=json.loads(_json(record))
+        # Transport guidance belongs to this installed reader, not the history.
+        projected['continuation_rules']=RULES
         projected['checkpoint_path']=str(path)
         def render():return HEADER+'\n'+_json(projected)
         if len(render())>MAX_CONTEXT:
@@ -354,16 +355,41 @@ def restore(data):
             if projected.get('latest_request'):
                 direction_offsets.add(projected['latest_request']['evidence']['offset'])
             projected['user_directions']=[
-                {'request_offset':item['evidence']['offset'],'timestamp':item['evidence'].get('timestamp')}
+                {'request_offset':item['evidence']['offset']}
                 if item['evidence']['offset'] in direction_offsets else item
                 for item in projected['user_directions']]
-            projected['addressed_requests']=[{
-                'request':_text(pair['request']['text'],128),'response':_text(pair['response']['text'],128),
-                'status':'response_recorded_not_task_completion',
-                'request_offset':pair['request']['evidence']['offset'],'response_offset':pair['response']['evidence']['offset'],
-                'request_timestamp':pair['request']['evidence'].get('timestamp')}
+            projected['addressed_request_columns']=['request_excerpt','response_excerpt',
+                'request_offset','response_offset','request_timestamp']
+            projected['addressed_request_status']='response_recorded_not_task_completion'
+            projected['excerpt_notice']='Excerpts are historical; read cited events for full text.'
+            def excerpt(text):
+                return text if len(text)<=128 else text[:128]+'?'
+            projected['addressed_requests']=[[
+                excerpt(pair['request']['text']),excerpt(pair['response']['text']),
+                pair['request']['evidence']['offset'],pair['response']['evidence']['offset'],
+                pair['request']['evidence'].get('timestamp')]
                 for pair in projected['addressed_requests']]
             projected['full_evidence_in_checkpoint']=True
+            # Progress fields often cite the same bookmark event. Intern those
+            # citations rather than shorten or discard their semantic content.
+            citations={}
+            def shared_citations(value):
+                if isinstance(value,list):
+                    for item in value:shared_citations(item)
+                elif isinstance(value,dict):
+                    ev=value.get('evidence')
+                    if isinstance(ev,dict):
+                        citations.setdefault(_json(ev),[]).append(value)
+                    for key,item in value.items():
+                        if key!='evidence':shared_citations(item)
+            shared_citations(projected)
+            refs={}
+            for encoded,uses in citations.items():
+                if len(uses)>1:
+                    ref=str(len(refs))
+                    refs[ref]=json.loads(encoded)
+                    for use in uses:use['evidence']={'ref':ref}
+            if refs:projected['evidence_refs']=refs
         for key in ('completed_steps','failed_steps','reported_completed','recent_work'):
             while len(render())>MAX_CONTEXT and projected.get(key):
                 projected[key].pop(0)
@@ -373,6 +399,7 @@ def restore(data):
         text=render()
         # The host has no delivery acknowledgment. Serialize and mark before
         # emitting: concurrent PostCompact/SessionStart cannot replay progress.
-        saved.update(restored=True,restored_at=time.time())
-        _write(path,saved)
+        if consume:
+            saved.update(restored=True,restored_at=time.time())
+            _write(path,saved)
         return text
