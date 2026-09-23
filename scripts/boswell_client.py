@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -63,9 +64,20 @@ def _request(method: str, path: str, *, params: dict | None = None,
 
 
 def startup(timeout: float | None = None) -> dict:
-    return _request("GET", "/v2/startup", params={
+    from opening_briefing import TASK_LIMIT, task_snapshot
+    budget = timeout if timeout is not None else REQUEST_TIMEOUT
+    started = time.monotonic()
+    response = _request("GET", "/v2/startup", params={
         "verbosity": "warm", "agent_id": AGENT_ID, "timezone": TIMEZONE,
-    }, timeout=timeout)
+    }, timeout=budget)
+    remaining = budget - (time.monotonic() - started)
+    if remaining <= 0:
+        raise BoswellUnavailable("startup work briefing exceeded its time budget")
+    # One read inside the startup time budget. Older servers' warm projection
+    # can omit every recent task, even when the existing task endpoint has it.
+    work = _request("GET", "/v2/tasks", params={"limit": TASK_LIMIT}, timeout=remaining)
+    response["work_briefing"] = task_snapshot(work)
+    return response
 
 
 def search(query: str, limit: int = 5, timeout: float | None = None) -> dict:

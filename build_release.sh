@@ -40,6 +40,7 @@ RUNTIME_FILES=(
   empty_result.py
   git_guard.py
   hook_health.py
+  opening_briefing.py
   prompt_retrieval.py
   protected_paths.py
   read_before_code.py
@@ -48,6 +49,7 @@ RUNTIME_FILES=(
   supersession.py
   transcript_monitor.py
   transcript_spool.py
+  work_state_orientation.py
 )
 for base in "${RUNTIME_FILES[@]}"; do
   test -f "scripts/$base"

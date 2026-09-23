@@ -19,8 +19,9 @@ sys.path.insert(0, str(HERE))
 import boswell_client
 import session_state
 import transcript_spool
+import work_state_orientation
+import opening_briefing
 from codex_config import FAIL_OPEN, HEARTBEAT_SECONDS
-
 
 CORRECTIVE_RE = re.compile(
     r"\b(correct(?:ion|ed|s)?|supersed(?:e|es|ed|ing)|wrong|incorrect|mistaken|"
@@ -52,7 +53,8 @@ AUTO_CONTEXT_CONTENT_CHARS = 600
 AUTO_CONTEXT_EXCLUDED_TYPES = {
     "agent_artifact", "credential", "sacred_manifest", "skill", "task", "transcript",
 }
-ORIENTATION_MAX_CHARS = 8_000
+# The manifest retains its original allowance; work has a separate 4k reserve.
+ORIENTATION_MAX_CHARS = 12_000
 ORIENTATION_HEADER = (
     "BOSWELL STARTUP HAS BEEN STRUCTURALLY LOADED exactly once for this session. "
     "This hook receipt satisfies the startup requirement: do not call "
@@ -221,6 +223,10 @@ def _orientation(payload: dict) -> str:
             if value not in (None, [], {})
         }
 
+    projection["work_state"] = work_state_orientation.project(payload.get("work_state"))
+    if isinstance(payload.get("work_briefing"), dict):
+        projection["work_briefing"] = payload["work_briefing"]
+
     # Detach nested references before the budget reducer mutates its projection;
     # the full raw response remains intact in the durable session cache.
     projection = json.loads(json.dumps(projection, ensure_ascii=False, default=str))
@@ -239,13 +245,24 @@ def _orientation(payload: dict) -> str:
         "status": "within_limit",
         "max_chars": ORIENTATION_MAX_CHARS,
     }
-    hook_trimmed = False
+    work = projection["work_state"]
+    hook_trimmed = work["projection"]["hook_projection"]["status"] == "trimmed"
+    if work["projection"]["status"] != "ok":
+        if integrity.get("status") == "ok":
+            integrity["status"] = "degraded"
+        degraded = integrity.setdefault("degraded_components", [])
+        if isinstance(degraded, list) and not any(
+            isinstance(item, dict) and item.get("component") == "work_state" for item in degraded
+        ):
+            degraded.append({"component": "work_state", "reason": work["projection"]["status"]})
 
     def render() -> str:
+        work_state_orientation.refresh(work)
         return ORIENTATION_HEADER + "\n" + json.dumps(
             projection, ensure_ascii=False, separators=(",", ":"))
 
     if len(render()) <= ORIENTATION_MAX_CHARS:
+        integrity["hook_projection"]["status"] = "trimmed" if hook_trimmed else "within_limit"
         return render()
 
     continuity = projection.get("continuity") or {}
@@ -263,6 +280,8 @@ def _orientation(payload: dict) -> str:
         (projection.get("behavioral_context"), 1),
         (projection.get("recent_thread"), 1),
         (projection.get("my_tasks"), 1),
+        (work["unfinished_tasks"], 0),
+        (work["projection"]["errors"], 0),
     ]
     for items, minimum in reducible:
         while isinstance(items, list) and len(items) > minimum and len(render()) > ORIENTATION_MAX_CHARS:
@@ -278,7 +297,7 @@ def _orientation(payload: dict) -> str:
     if len(render()) > ORIENTATION_MAX_CHARS:
         compact = {
             key: projection.get(key) for key in (
-                "local_time", "sacred_manifest", "agent_id", "startup_integrity")
+                "local_time", "sacred_manifest", "agent_id", "startup_integrity", "work_state", "work_briefing")
             if projection.get(key) is not None
         }
         if continuity:
@@ -293,6 +312,16 @@ def _orientation(payload: dict) -> str:
             }
         projection = compact
         hook_trimmed = True
+    briefing = projection.get("work_briefing")
+    if isinstance(briefing, dict):
+        tasks = briefing.get("tasks")
+        while isinstance(tasks, list) and tasks and len(render()) > ORIENTATION_MAX_CHARS:
+            tasks.pop()
+            briefing["returned"] = len(tasks)
+            total = briefing.get("unfinished_count")
+            briefing["omitted_count"] = max(0, total - len(tasks)) if type(total) is int else None
+            briefing["truncated"] = True
+            hook_trimmed = True
     integrity["hook_projection"]["status"] = (
         "trimmed" if hook_trimmed else "within_limit")
     rendered = render()
@@ -410,10 +439,12 @@ def prompt_startup_gate(data: dict) -> dict | None:
                 "Boswell startup continuity is missing for this session and "
                 f"recovery failed; this prompt cannot proceed safely: {reason}"
             )
-        return _recovered_context("UserPromptSubmit", sid, state, cached)
+        return opening_briefing.with_recovery(
+            data, _recovered_context("UserPromptSubmit", sid, state, cached))
     if state.pop("orientation_pending", None):
         session_state.save(sid, state)
-        return _recovered_context("UserPromptSubmit", sid, state, cached)
+        return opening_briefing.with_recovery(
+            data, _recovered_context("UserPromptSubmit", sid, state, cached))
     return None
 
 
@@ -488,6 +519,9 @@ def _user_prompt(data: dict) -> dict | None:
     gate = prompt_startup_gate(data)
     if gate is not None:
         return gate
+    opening = opening_briefing.on_prompt(data)
+    if opening is not None:
+        return opening
     prompt = _prompt_text(data)
     if not session_state.retrieval_eligible(prompt):
         return None
@@ -741,6 +775,9 @@ def _subagent_stop(data: dict) -> None:
 
 
 def _stop_event(data: dict) -> dict | None:
+    opening = opening_briefing.on_stop(data)
+    if opening is not None:
+        return opening
     sid = data.get("session_id")
     state = session_state.load(sid)
     try:

@@ -9,7 +9,8 @@
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" SessionStart",
             "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='SessionStart';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 30,
-            "statusMessage": "Loading Boswell continuity"
+            "statusMessage": "Loading Boswell continuity",
+            "additionalContextLimit": 4000
           }
         ]
       }
@@ -22,7 +23,8 @@
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" UserPromptSubmit",
             "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='UserPromptSubmit';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 20,
-            "statusMessage": "Retrieving relevant Boswell memories"
+            "statusMessage": "Retrieving relevant Boswell memories",
+            "additionalContextLimit": 4000
           }
         ]
       }
@@ -36,7 +38,8 @@
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PreToolUse",
             "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PreToolUse';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
             "timeout": 10,
-            "statusMessage": "Applying Boswell governance"
+            "statusMessage": "Applying Boswell governance",
+            "additionalContextLimit": 4000
           }
         ]
       }
@@ -76,7 +79,8 @@
             "type": "command",
             "command": "python3 \"$PLUGIN_ROOT/scripts/codex_dispatcher.py\" PostCompact",
             "commandWindows": "python -c \"import glob,os,runpy,sys,time;event='PostCompact';home=os.environ.get('CODEX_HOME') or os.path.join(os.path.expanduser('~'),'.codex');roots=lambda:[r for r in (os.environ.get('PLUGIN_ROOT'),os.environ.get('CLAUDE_PLUGIN_ROOT')) if r]+glob.glob(os.path.join(home,'plugins','cache','*','boswell-hooks','*'));find=lambda:next((p for r in roots() if os.path.isfile(p:=os.path.join(r,'scripts','codex_dispatcher.py'))),None);path=next((p for _ in range(100) if ((p:=find()) is not None or bool(time.sleep(0.1)))),None) or find();path or sys.exit('boswell-hooks bootstrap: dispatcher unavailable after 10s');sys.argv=['codex_dispatcher.py',event];runpy.run_path(path,run_name='__main__')\"",
-            "timeout": 10
+            "timeout": 10,
+            "additionalContextLimit": 4000
           }
         ]
       }

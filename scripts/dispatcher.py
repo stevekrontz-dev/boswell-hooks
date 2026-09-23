@@ -130,6 +130,11 @@ def _user_prompt(data):
     if gate is not None:
         sys.stdout.write(json.dumps(gate, ensure_ascii=True))
         return
+    import opening_briefing
+    opening = opening_briefing.on_prompt(data)
+    if opening is not None:
+        sys.stdout.write(json.dumps(opening, ensure_ascii=True))
+        return
     try:
         import prompt_retrieval
         result = prompt_retrieval.evaluate(data)
@@ -262,6 +267,11 @@ def _pre_tool(data):
 
 def _stop(data):
     # The ONLY handler permitted to emit decision JSON on stdout.
+    import opening_briefing
+    opening = opening_briefing.on_stop(data)
+    if opening is not None:
+        sys.stdout.write(json.dumps(opening, ensure_ascii=True))
+        return
     try:
         import done_gate
         result = done_gate.evaluate(data)

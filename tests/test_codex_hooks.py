@@ -108,7 +108,7 @@ class CodexHookTests(unittest.TestCase):
         ):
             dispatcher.boswell_client.startup()
 
-        self.assertEqual(request.call_args.kwargs["params"], {
+        self.assertEqual(request.call_args_list[0].kwargs["params"], {
             "verbosity": "warm",
             "agent_id": "Test Client",
             "timezone": "Europe/London",

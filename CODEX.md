@@ -9,6 +9,18 @@ exactly once for the client session, stores the raw response in a durable
 machine-local cache, and injects a bounded orientation before the first model
 response.
 
+The same startup operation also reads the existing tenant-authenticated task
+endpoint once, within the original time budget. It caches up to five recently
+updated unfinished task summaries, with owners, statuses, timestamps, and exact
+omission counts when the bounded scan is exhaustive. A capped or malformed scan
+reports unknown totals. These records are context, never claims or permission to
+execute work. A dedicated server `work_state`, when supplied, is also preserved.
+
+The shared orientation has a 12,000-character ceiling, reserving room for work
+alongside the manifest. Task rows can be reduced with truthful counts; sacred
+commitments are not discarded. Codex handlers allow 4,000 approximate tokens so
+the host does not silently replace this bounded briefing with a small preview.
+
 The injected receipt explicitly satisfies the startup requirement. Models must
 not call `boswell_startup` again on later user messages. A cached `resume` is
 silent, `clear` reinjects the cached orientation into the new context without
@@ -33,7 +45,7 @@ never retried. Until recovery succeeds the session still fails closed.
 
 ## Prompt-time retrieval
 
-`UserPromptSubmit` is retrieval-only. It does not run startup except to
+`UserPromptSubmit` does not run startup except to
 recover a session whose `SessionStart` never completed, as described above.
 
 The current precision-first gate:
@@ -43,6 +55,13 @@ The current precision-first gate:
 - excludes transcripts, credentials, tasks, skills, manifests, and low-value
   agent-only artifacts;
 - admits at most two rows and abstains when confidence is weak.
+
+For the first human prompt only, a greeting additionally requests a brief
+orientation to current work and the next step. It performs no extra retrieval.
+Both clients use the same check: if the response is only a bare greeting, `Stop`
+requests one correction. Later prompts, explicit user steering, and a host's
+stop-continuation flag prevent retry loops. This catches a narrow omission; it
+does not certify semantic correctness or authorize automatic task execution.
 
 Explicit Boswell search, recall, task briefing, and branch reads remain
 available to the model when broad or targeted evidence is actually needed.
