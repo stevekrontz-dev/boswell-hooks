@@ -45,12 +45,20 @@ authorization or approval requirements. Host-generated messages, external tool
 prose, and copied compaction histories are excluded from human directions.
 Event timestamps stay separate from session start and checkpoint time.
 
-`PostCompact` validates without consuming the checkpoint. Only
+`PostCompact` validates without consuming the checkpoint.
 `SessionStart(source=compact)` restores it under a cross-process lock, without
 startup replay: Codex does not accept additional context from `PostCompact`. The host provides no
 delivery acknowledgment: marking before output prevents duplicates, but a
 process failure between that mark and delivery can lose the injection. Missing,
 invalid, over-budget, or failed checkpoints produce an explicit failure.
+
+If Codex misses that callback, `UserPromptSubmit` or the next `PreToolUse` can
+restore the pending checkpoint once. Recovery verifies the captured transcript
+prefix hash and requires a later top-level host `compacted` event; merely
+saving a checkpoint, quoting a boundary, or resuming a session cannot trigger
+it. Existing tool denials and context are preserved. Bounded callback traces
+record entry/result status without prompt text or tool arguments. This fallback
+does not guarantee injection before an answer that uses no tools or user turn.
 
 The injected view is capped at 8,500 characters. Repeated citations and excerpts
 use shared references and request rows declare their columns and response-only

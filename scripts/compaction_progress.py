@@ -314,10 +314,56 @@ def prepare(data):
     return record
 
 
-def restore(data, *, consume=True):
+def audit(data, event, phase, **details):
+    """Bounded callback evidence, without prompt/tool arguments or secrets."""
+    try:
+        with _locked(data.get('session_id')) as checkpoint:
+            path=checkpoint.with_suffix('.callbacks.json')
+            saved=_read(path) or {'events':[]}
+            saved['events']=(saved['events']+[{'event':event,'phase':phase,
+                'at':datetime.now(timezone.utc).isoformat(),**details}])[-30:]
+            _write(path,saved)
+    except (OSError, ValueError):
+        pass
+
+
+def _compacted_after(record, data):
+    """Require an append-only host boundary after this captured source prefix."""
+    source=record['source']
+    path=Path(source['transcript_path'])
+    if not data.get('transcript_path') or Path(data['transcript_path']).resolve()!=path.resolve():
+        return False
+    size=path.stat().st_size
+    captured=source['bytes']
+    if size<=captured or size>MAX_SOURCE:
+        return False
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        remaining=captured
+        while remaining:
+            chunk=stream.read(min(remaining,1024*1024))
+            if not chunk:return False
+            digest.update(chunk);remaining-=len(chunk)
+        if digest.hexdigest()!=source['sha256']:
+            raise ValueError('Progress source prefix changed before recovery')
+        remaining=size-captured
+        while remaining:
+            raw=stream.readline(min(MAX_LINE,remaining)+1)
+            if len(raw)>MAX_LINE:raise ValueError('Oversized post-checkpoint event')
+            if not raw:return False
+            remaining-=len(raw)
+            try:item=json.loads(raw)
+            except ValueError:continue
+            if isinstance(item,dict) and item.get('type')=='compacted':
+                return True
+    return False
+
+
+def restore(data, *, consume=True, after_compaction=False, max_context=MAX_CONTEXT):
     with _locked(data.get('session_id')) as path:
         saved=_read(path)
         if saved is None:
+            if after_compaction:return None
             raise ValueError('Progress checkpoint is missing; recover current work from transcript evidence and existing agent ownership before continuing')
         if saved.get('failure'):
             raise ValueError('Progress capture failed: '+saved['failure'])
@@ -327,6 +373,8 @@ def restore(data, *, consume=True):
             raise ValueError('Progress checkpoint integrity mismatch')
         if saved.get('restored'):
             return None
+        if after_compaction and not _compacted_after(record,data):
+            return None
         # Full evidence remains in the durable checkpoint; never drop ownership
         # or completed-handoff status merely to fit model context.
         projected=json.loads(_json(record))
@@ -334,7 +382,7 @@ def restore(data, *, consume=True):
         projected['continuation_rules']=RULES
         projected['checkpoint_path']=str(path)
         def render():return HEADER+'\n'+_json(projected)
-        if len(render())>MAX_CONTEXT:
+        if len(render())>max_context:
             # Source hashes remain in the full checkpoint. Compact repeated
             # citations before considering omission of any progress evidence.
             def compact(value):
@@ -391,10 +439,10 @@ def restore(data, *, consume=True):
                     for use in uses:use['evidence']={'ref':ref}
             if refs:projected['evidence_refs']=refs
         for key in ('completed_steps','failed_steps','reported_completed','recent_work'):
-            while len(render())>MAX_CONTEXT and projected.get(key):
+            while len(render())>max_context and projected.get(key):
                 projected[key].pop(0)
                 projected['additional_evidence_in_checkpoint']=True
-        if len(render())>MAX_CONTEXT:
+        if len(render())>max_context:
             raise ValueError('Progress ownership/objective exceeds context budget; read checkpoint '+str(path))
         text=render()
         # The host has no delivery acknowledgment. Serialize and mark before

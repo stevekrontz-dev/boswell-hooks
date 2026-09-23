@@ -761,6 +761,29 @@ def _restore_progress(data, event):
         return _stop(f"Boswell progress restoration failed: {exc}")
 
 
+def _recover_progress(data, event, result):
+    """Recover a missed compact callback without replaying startup or guards."""
+    if event=='UserPromptSubmit' and result and (
+        result.get('continue') is False or result.get('decision')=='block'):
+        return result
+    import compaction_progress
+    output=(result or {}).get('hookSpecificOutput') or {}
+    existing=output.get('additionalContext') or ''
+    try:
+        text=compaction_progress.restore(data,after_compaction=True,
+            max_context=compaction_progress.MAX_CONTEXT-len(existing)-2)
+    except Exception as exc:
+        compaction_progress.audit(data,event,'recovery_error',error=type(exc).__name__)
+        reason=f'Boswell progress recovery failed: {exc}'
+        return _deny(reason) if event=='PreToolUse' else _stop(reason)
+    if text is None:return result
+    recovered=dict(result or {})
+    recovered['hookSpecificOutput']={**output,'hookEventName':event,
+        'additionalContext':text+('\n\n'+existing if existing else '')}
+    compaction_progress.audit(data,event,'recovered')
+    return recovered
+
+
 def _post_compact(data: dict) -> dict | None:
     cached = session_state.load_startup_cache(data.get("session_id"))
     if not cached:
@@ -846,9 +869,17 @@ def main() -> int:
     handler = ROUTES.get(event)
     if handler is None:
         return 0
+    import compaction_progress
+    traced=event in {'SessionStart','PreCompact','PostCompact'}
+    if traced:compaction_progress.audit(data,event,'entered',source=data.get('source'))
     try:
-        _emit(handler(data))
+        result=handler(data)
+        if event in {'UserPromptSubmit','PreToolUse'}:
+            result=_recover_progress(data,event,result)
+        _emit(result)
+        if traced:compaction_progress.audit(data,event,'emitted' if result else 'no_output')
     except Exception as exc:
+        if traced:compaction_progress.audit(data,event,'error',error=type(exc).__name__)
         if event in {"SessionStart", "UserPromptSubmit", "PostCompact"}:
             _emit(_stop(f"Boswell {event} hook failed: {type(exc).__name__}"))
         elif event == "PreToolUse":

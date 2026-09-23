@@ -44,6 +44,76 @@ def restored(data):
     return result['hookSpecificOutput']['additionalContext']
 
 
+@pytest.mark.parametrize('hook',['PreToolUse','UserPromptSubmit'])
+def test_missed_session_callback_recovers_only_after_confirmed_compaction(lab,hook):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    data={**lab,'tool_name':'Read','tool_input':{},'prompt':'and recursive!'}
+    with mock.patch.object(dispatcher,'_user_prompt',return_value=None), mock.patch.object(dispatcher,'_pre_tool',return_value=None):
+        assert dispatcher._recover_progress(data,hook,None) is None
+        with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+            stream.write(json.dumps({'type':'response_item','payload':{'type':'message','role':'assistant','content':'{"type":"compacted"}'}})+'\n')
+        assert dispatcher._recover_progress(data,hook,None) is None
+        with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+            stream.write(json.dumps({'type':'compacted','timestamp':'2026-09-23T22:44:54Z','payload':{}})+'\n')
+        with mock.patch.object(dispatcher.boswell_client,'startup') as startup:
+            result=dispatcher._recover_progress(data,hook,None)
+            startup.assert_not_called()
+    record=json.loads(result['hookSpecificOutput']['additionalContext'].split('\n',1)[1])
+    assert record['agents']['/root/authority']['status']=='completed'
+    assert dispatcher._recover_progress(data,hook,None) is None
+    assert progress._read(progress._paths(lab['session_id'])[0])['restored'] is True
+
+
+def test_recovery_preserves_governance_denial_and_other_context(lab):
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps({'type':'compacted','payload':{}})+'\n')
+    denied=dispatcher._deny('Existing guard must still block.')
+    result=dispatcher._recover_progress(lab,'PreToolUse',denied)
+    assert result['hookSpecificOutput']['permissionDecision']=='deny'
+    assert result['hookSpecificOutput']['permissionDecisionReason']=='Existing guard must still block.'
+    assert 'BOSWELL COMPACTION PROGRESS' in result['hookSpecificOutput']['additionalContext']
+
+
+def test_recovery_rejects_rewritten_transcript_without_consuming(lab):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    path=Path(lab['transcript_path'])
+    path.write_text(path.read_text(encoding='utf-8').replace('Build memory cards.','Build altered data.')+
+        json.dumps({'type':'compacted','payload':{}})+'\n',encoding='utf-8')
+    result=dispatcher._recover_progress(lab,'PreToolUse',None)
+    assert result['hookSpecificOutput']['permissionDecision']=='deny'
+    assert progress._read(progress._paths(lab['session_id'])[0])['restored'] is False
+
+
+def test_actual_dispatcher_entrypoint_recovers_and_audits(lab,monkeypatch):
+    import io
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps({'type':'compacted','payload':{}})+'\n')
+    monkeypatch.setattr(sys,'argv',['codex_dispatcher.py','PreToolUse'])
+    monkeypatch.setattr(sys,'stdin',io.StringIO(json.dumps({**lab,'tool_name':'Read'})))
+    output=io.StringIO()
+    monkeypatch.setattr(sys,'stdout',output)
+    assert dispatcher.main()==0
+    assert 'BOSWELL COMPACTION PROGRESS' in json.loads(output.getvalue())['hookSpecificOutput']['additionalContext']
+    log=progress._read(progress._paths(lab['session_id'])[0].with_suffix('.callbacks.json'))
+    assert log['events'][-1]['phase']=='recovered'
+
+
+@pytest.mark.parametrize('blocked',[{'continue':False,'stopReason':'Unavailable'}, {'decision':'block','reason':'Rejected'}])
+def test_rejected_prompt_does_not_consume_undelivered_progress(lab,blocked):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps({'type':'compacted','payload':{}})+'\n')
+    assert dispatcher._recover_progress(lab,'UserPromptSubmit',blocked)==blocked
+    assert progress._read(progress._paths(lab['session_id'])[0])['restored'] is False
+    assert dispatcher._recover_progress(lab,'UserPromptSubmit',None)['hookSpecificOutput']['additionalContext']
+
+
 def test_completed_handoff_restored_as_completed_without_reassignment(lab):
     dispatcher._pre_compact(lab)
     with mock.patch.object(dispatcher.boswell_client,'startup') as startup:
