@@ -100,6 +100,17 @@ class StartupBriefingTests(unittest.TestCase):
         for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostCompact"):
             self.assertGreaterEqual(hooks[event][0]["hooks"][0].get("additionalContextLimit", 2500), 4000)
 
+    def test_claude_budget_preserves_manifest_and_current_task(self):
+        with mock.patch.object(boswell_client, "_request", side_effect=[payload(), tasks()]):
+            result = boswell_client.startup()
+        result["sacred_manifest"]["identity"] = "s" * 6000
+        result["recent_thread"] = [{"message": "old" * 1000}] * 8
+        rendered = codex._orientation(result, max_chars=9000)
+        projected = json.loads(rendered.split("\n", 1)[1])
+        self.assertLessEqual(len(rendered), 9000)
+        self.assertEqual(projected["sacred_manifest"], result["sacred_manifest"])
+        self.assertEqual(projected["work_briefing"]["tasks"][0]["id"], "new")
+
     def test_raw_briefing_survives_formatter_budget_with_manifest_intact(self):
         with mock.patch.object(boswell_client, "_request", side_effect=[payload(), tasks()]):
             result = boswell_client.startup()

@@ -35,6 +35,11 @@ os.environ.setdefault("BOSWELL_AGENT_ID", "Claude Code")
 os.environ.setdefault(
     "BOSWELL_HOOK_STATE", str(Path.home() / ".boswell" / "claude-hooks"))
 
+# Claude persists each additionalContext over 10,000 characters to disk.
+# Leave room for recovery instructions and bounded health notices inline.
+CLAUDE_ORIENTATION_MAX_CHARS = 9000
+CLAUDE_CONTEXT_MAX_CHARS = 9800
+
 
 def _read_input():
     try:
@@ -72,7 +77,7 @@ def _session_start(data):
     """Load and emit the same durable one-time startup receipt as Codex."""
     import codex_dispatcher
 
-    result = codex_dispatcher._session_start(data)
+    result = codex_dispatcher._session_start(data, max_chars=CLAUDE_ORIENTATION_MAX_CHARS)
     if result is None:
         return
 
@@ -99,7 +104,12 @@ def _session_start(data):
     if notices:
         output = result.get("hookSpecificOutput")
         if isinstance(output, dict) and output.get("additionalContext"):
-            output["additionalContext"] += "\n" + "\n".join(notices)
+            extra = "\n" + "\n".join(notices)
+            room = max(0, CLAUDE_CONTEXT_MAX_CHARS - len(output["additionalContext"]))
+            if len(extra) > room:
+                marker = "\n[Health notices shortened for host context budget.]"
+                extra = extra[:max(0, room - len(marker))] + marker[:room]
+            output["additionalContext"] += extra
     sys.stdout.write(json.dumps(result, ensure_ascii=True))
 
 
@@ -120,7 +130,7 @@ def _user_prompt(data):
     # startup it owed and returning the receipt; otherwise it fails closed.
     try:
         import codex_dispatcher
-        gate = codex_dispatcher.prompt_startup_gate(data)
+        gate = codex_dispatcher.prompt_startup_gate(data, max_chars=CLAUDE_ORIENTATION_MAX_CHARS)
     except Exception:
         gate = {
             "continue": False,

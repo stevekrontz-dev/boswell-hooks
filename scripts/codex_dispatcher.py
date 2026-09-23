@@ -154,7 +154,7 @@ def _legacy_task(task: object, *, assigned: bool = False) -> dict | None:
     return {key: value for key, value in projected.items() if value is not None}
 
 
-def _orientation(payload: dict) -> str:
+def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> str:
     continuity = payload.get("continuity")
     if isinstance(continuity, dict):
         projection = {
@@ -243,7 +243,7 @@ def _orientation(payload: dict) -> str:
         projection["startup_integrity"] = integrity
     integrity["hook_projection"] = {
         "status": "within_limit",
-        "max_chars": ORIENTATION_MAX_CHARS,
+        "max_chars": max_chars,
     }
     work = projection["work_state"]
     hook_trimmed = work["projection"]["hook_projection"]["status"] == "trimmed"
@@ -261,7 +261,7 @@ def _orientation(payload: dict) -> str:
         return ORIENTATION_HEADER + "\n" + json.dumps(
             projection, ensure_ascii=False, separators=(",", ":"))
 
-    if len(render()) <= ORIENTATION_MAX_CHARS:
+    if len(render()) <= max_chars:
         integrity["hook_projection"]["status"] = "trimmed" if hook_trimmed else "within_limit"
         return render()
 
@@ -284,17 +284,17 @@ def _orientation(payload: dict) -> str:
         (work["projection"]["errors"], 0),
     ]
     for items, minimum in reducible:
-        while isinstance(items, list) and len(items) > minimum and len(render()) > ORIENTATION_MAX_CHARS:
+        while isinstance(items, list) and len(items) > minimum and len(render()) > max_chars:
             items.pop()
             hook_trimmed = True
 
-    if len(render()) > ORIENTATION_MAX_CHARS:
+    if len(render()) > max_chars:
         for key in ("retrieval_priming", "retrieval", "expiring_bookmarks",
                     "open_tasks", "behavioral_context", "recent_thread"):
             if projection.pop(key, None) is not None:
                 hook_trimmed = True
 
-    if len(render()) > ORIENTATION_MAX_CHARS:
+    if len(render()) > max_chars:
         compact = {
             key: projection.get(key) for key in (
                 "local_time", "sacred_manifest", "agent_id", "startup_integrity", "work_state", "work_briefing")
@@ -315,7 +315,7 @@ def _orientation(payload: dict) -> str:
     briefing = projection.get("work_briefing")
     if isinstance(briefing, dict):
         tasks = briefing.get("tasks")
-        while isinstance(tasks, list) and tasks and len(render()) > ORIENTATION_MAX_CHARS:
+        while isinstance(tasks, list) and tasks and len(render()) > max_chars:
             tasks.pop()
             briefing["returned"] = len(tasks)
             total = briefing.get("unfinished_count")
@@ -325,15 +325,15 @@ def _orientation(payload: dict) -> str:
     integrity["hook_projection"]["status"] = (
         "trimmed" if hook_trimmed else "within_limit")
     rendered = render()
-    if len(rendered) > ORIENTATION_MAX_CHARS:
+    if len(rendered) > max_chars:
         raise OrientationBudgetExceeded(
             f"Boswell orientation is {len(rendered)} characters; "
-            f"hard limit is {ORIENTATION_MAX_CHARS}"
+            f"hard limit is {max_chars}"
         )
     return rendered
 
 
-def _session_start(data: dict) -> dict:
+def _session_start(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dict:
     sid = data.get("session_id")
     state = session_state.load(sid)
     cached = session_state.load_startup_cache(sid)
@@ -368,7 +368,7 @@ def _session_start(data: dict) -> dict:
     except Exception:
         pass
     try:
-        orientation = _orientation(cached)
+        orientation = _orientation(cached, max_chars=max_chars)
     except OrientationBudgetExceeded as exc:
         state["startup_loaded"] = False
         session_state.save(sid, state)
@@ -410,9 +410,10 @@ def _recover_startup(sid: str | None, state: dict, *,
     return payload, None
 
 
-def _recovered_context(event: str, sid: str | None, state: dict, cached: dict) -> dict:
+def _recovered_context(event: str, sid: str | None, state: dict, cached: dict, *,
+                       max_chars: int = ORIENTATION_MAX_CHARS) -> dict:
     try:
-        orientation = _orientation(cached)
+        orientation = _orientation(cached, max_chars=max_chars)
     except OrientationBudgetExceeded as exc:
         state["startup_loaded"] = False
         session_state.save(sid, state)
@@ -420,7 +421,7 @@ def _recovered_context(event: str, sid: str | None, state: dict, cached: dict) -
     return _context(event, orientation, system_message=RECOVERY_NOTICE)
 
 
-def prompt_startup_gate(data: dict) -> dict | None:
+def prompt_startup_gate(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dict | None:
     """Shared prompt-time continuity gate for the Codex and Claude adapters.
 
     Returns None when the session already holds its durable startup receipt.
@@ -440,11 +441,11 @@ def prompt_startup_gate(data: dict) -> dict | None:
                 f"recovery failed; this prompt cannot proceed safely: {reason}"
             )
         return opening_briefing.with_recovery(
-            data, _recovered_context("UserPromptSubmit", sid, state, cached))
+            data, _recovered_context("UserPromptSubmit", sid, state, cached, max_chars=max_chars))
     if state.pop("orientation_pending", None):
         session_state.save(sid, state)
         return opening_briefing.with_recovery(
-            data, _recovered_context("UserPromptSubmit", sid, state, cached))
+            data, _recovered_context("UserPromptSubmit", sid, state, cached, max_chars=max_chars))
     return None
 
 

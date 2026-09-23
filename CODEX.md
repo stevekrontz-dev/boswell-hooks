@@ -20,6 +20,9 @@ The shared orientation has a 12,000-character ceiling, reserving room for work
 alongside the manifest. Task rows can be reduced with truthful counts; sacred
 commitments are not discarded. Codex handlers allow 4,000 approximate tokens so
 the host does not silently replace this bounded briefing with a small preview.
+Claude uses a 9,000-character orientation budget and caps appended health
+notices at 9,800 total characters, below its installed client's 10,000-character
+spill threshold. Prompt-time startup recovery uses the same client budget.
 
 The injected receipt explicitly satisfies the startup requirement. Models must
 not call `boswell_startup` again on later user messages. A cached `resume` is

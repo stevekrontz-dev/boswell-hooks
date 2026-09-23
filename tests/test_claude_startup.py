@@ -38,8 +38,42 @@ class ClaudeStartupTests(unittest.TestCase):
         ):
             claude_dispatcher._session_start({"session_id": "claude-1", "source": "startup"})
 
-        startup.assert_called_once_with({"session_id": "claude-1", "source": "startup"})
+        startup.assert_called_once_with({"session_id": "claude-1", "source": "startup"}, max_chars=9000)
         self.assertEqual(json.loads(output.getvalue()), receipt)
+
+    def test_large_health_notice_cannot_spill_startup_out_of_context(self):
+        receipt = {"hookSpecificOutput": {"additionalContext": "s" * 9000}}
+        output = io.StringIO()
+        with (
+            mock.patch("codex_dispatcher._session_start", return_value=receipt),
+            mock.patch("transcript_monitor.check_pending", return_value="h" * 12000),
+            mock.patch("hook_health.report", return_value=None),
+            contextlib.redirect_stdout(output),
+        ):
+            claude_dispatcher._session_start({"session_id": "claude-1"})
+        context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertLessEqual(len(context), 9800)
+        self.assertTrue(context.startswith("s" * 9000))
+        self.assertIn("shortened", context)
+
+    def test_recovered_greeting_uses_claude_budget_including_contract(self):
+        import codex_dispatcher
+        cached = {"sacred_manifest": {"identity": "s" * 6000}, "recent_thread": []}
+        output = io.StringIO()
+        with (
+            mock.patch("session_state.load", return_value={}),
+            mock.patch("session_state.load_startup_cache", return_value=None),
+            mock.patch("session_state.save"),
+            mock.patch("session_state.save_startup_cache"),
+            mock.patch("boswell_client.startup", return_value=cached),
+            mock.patch.object(codex_dispatcher, "_orientation", wraps=codex_dispatcher._orientation) as orientation,
+            contextlib.redirect_stdout(output),
+        ):
+            claude_dispatcher._user_prompt({"session_id": "claude-1", "prompt": "good afternoon"})
+        orientation.assert_called_once_with(cached, max_chars=9000)
+        context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertLessEqual(len(context), 9800)
+        self.assertIn("Opening greeting", context)
 
     def test_cached_resume_is_silent(self):
         output = io.StringIO()
