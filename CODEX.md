@@ -19,9 +19,22 @@ If the hook receipt is absent because the plugin did not run, client-level
 instructions may call `boswell_startup` once as a fallback. That fallback is
 never a per-message ritual.
 
+## Startup recovery
+
+A `SessionStart` that never completes leaves no durable cache: the host can
+kill the hook at its timeout during a machine-wide I/O stall, or Boswell can be
+briefly unreachable. Such a session must not stay halted for its whole life.
+The next `UserPromptSubmit` or material `PreToolUse` performs the single
+startup that `SessionStart` owed, writes the same durable cache, and injects
+the receipt as prompt context (a tool-time recovery defers the receipt to the
+next prompt). Attempts back off for twenty seconds, the tool-time call is
+bounded to fit the PreToolUse budget, and an explicit over-budget verdict is
+never retried. Until recovery succeeds the session still fails closed.
+
 ## Prompt-time retrieval
 
-`UserPromptSubmit` is retrieval-only. It does not run startup.
+`UserPromptSubmit` is retrieval-only. It does not run startup except to
+recover a session whose `SessionStart` never completed, as described above.
 
 The current precision-first gate:
 

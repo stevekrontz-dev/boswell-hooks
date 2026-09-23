@@ -258,6 +258,7 @@ class CodexHookTests(unittest.TestCase):
 
     @mock.patch.object(dispatcher.boswell_client, "search")
     def test_substantive_prompt_retrieves_and_records_evidence(self, search):
+        session_state.save_startup_cache("s2", self.startup_payload())
         session_state.save("s2", {"startup_loaded": True})
         search.return_value = {"results": [{
             "message": "Codex hook architecture",
@@ -274,6 +275,7 @@ class CodexHookTests(unittest.TestCase):
 
     @mock.patch.object(dispatcher.boswell_client, "search")
     def test_short_followup_does_not_search(self, search):
+        session_state.save_startup_cache("followup", self.startup_payload())
         session_state.save("followup", {"startup_loaded": True})
         self.assertIsNone(dispatcher._user_prompt({
             "session_id": "followup", "prompt": "design it",
@@ -282,6 +284,7 @@ class CodexHookTests(unittest.TestCase):
 
     @mock.patch.object(dispatcher.boswell_client, "search")
     def test_automatic_retrieval_abstains_on_weak_results(self, search):
+        session_state.save_startup_cache("noise", self.startup_payload())
         session_state.save("noise", {"startup_loaded": True})
         search.return_value = {"results": [{
             "message": "Drafted touch for lead 349",
@@ -298,6 +301,7 @@ class CodexHookTests(unittest.TestCase):
 
     @mock.patch.object(dispatcher.boswell_client, "search")
     def test_automatic_retrieval_caps_and_filters_results(self, search):
+        session_state.save_startup_cache("filter", self.startup_payload())
         session_state.save("filter", {"startup_loaded": True})
         search.return_value = {"results": [
             {"message": "raw transcript", "content": "x", "blob_hash": "t",
@@ -319,12 +323,84 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn('"message":"two"', injected)
         self.assertNotIn('"message":"three"', injected)
 
-    def test_material_tool_is_denied_without_startup(self):
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_material_tool_is_denied_without_startup(self, startup):
+        startup.side_effect = dispatcher.boswell_client.BoswellUnavailable(
+            "Boswell transport failure: TimeoutError")
         result = dispatcher._pre_tool({
             "session_id": "blind", "tool_name": "apply_patch", "tool_input": {},
         })
         self.assertEqual(
             result["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("recovery failed", result["hookSpecificOutput"]["permissionDecisionReason"])
+        startup.assert_called_once_with(timeout=dispatcher.PRE_TOOL_RECOVERY_TIMEOUT)
+
+    @mock.patch.object(dispatcher.transcript_spool, "flush_pending")
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_prompt_recovers_a_session_start_that_never_completed(self, startup, _flush):
+        startup.return_value = self.synthesized_startup_payload()
+
+        result = dispatcher._user_prompt({"session_id": "late", "prompt": "hi"})
+
+        self.assertTrue(result["continue"])
+        self.assertIn("STRUCTURALLY LOADED", result["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("recovered", result["systemMessage"])
+        state = session_state.load("late")
+        self.assertTrue(state["startup_loaded"])
+        self.assertTrue(state["startup_recovered"])
+        self.assertEqual(state["startup_calls"], 1)
+        self.assertIsNotNone(session_state.load_startup_cache("late"))
+        # A recovered session behaves like any oriented session afterwards:
+        # no second receipt, no second startup, a resume stays silent.
+        self.assertIsNone(dispatcher._user_prompt({"session_id": "late", "prompt": "hi"}))
+        self.assertIsNone(dispatcher._session_start({"session_id": "late", "source": "resume"}))
+        startup.assert_called_once()
+
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_prompt_recovery_fails_closed_and_backs_off(self, startup):
+        startup.side_effect = dispatcher.boswell_client.BoswellUnavailable(
+            "Boswell transport failure: TimeoutError")
+        event = {"session_id": "outage", "prompt": "Audit the deployment before editing"}
+
+        first = dispatcher._user_prompt(event)
+        second = dispatcher._user_prompt(event)
+
+        self.assertFalse(first["continue"])
+        self.assertIn("recovery failed", first["stopReason"])
+        self.assertIn("TimeoutError", first["stopReason"])
+        self.assertFalse(second["continue"])
+        self.assertIn("already attempted", second["stopReason"])
+        startup.assert_called_once()
+        self.assertEqual(session_state.load("outage")["startup_recovery_attempts"], 1)
+
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_material_tool_recovers_and_defers_the_receipt_to_the_next_prompt(self, startup):
+        startup.return_value = self.synthesized_startup_payload()
+        tool = {"session_id": "late-tool", "tool_name": "apply_patch", "tool_input": {}}
+
+        self.assertIsNone(dispatcher._pre_tool(tool))
+
+        startup.assert_called_once_with(timeout=dispatcher.PRE_TOOL_RECOVERY_TIMEOUT)
+        self.assertTrue(session_state.load("late-tool")["orientation_pending"])
+        receipt = dispatcher._user_prompt({"session_id": "late-tool", "prompt": "ok"})
+        self.assertIn("STRUCTURALLY LOADED", receipt["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("orientation_pending", session_state.load("late-tool"))
+        self.assertIsNone(dispatcher._user_prompt({"session_id": "late-tool", "prompt": "ok"}))
+        self.assertIsNone(dispatcher._pre_tool(tool))
+        startup.assert_called_once()
+
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_explicit_over_budget_verdict_is_never_retried(self, startup):
+        session_state.save("verdict", {"startup_loaded": False})
+
+        prompt = dispatcher._user_prompt({"session_id": "verdict", "prompt": "Continue the audit now"})
+        tool = dispatcher._pre_tool({
+            "session_id": "verdict", "tool_name": "apply_patch", "tool_input": {},
+        })
+
+        self.assertFalse(prompt["continue"])
+        self.assertEqual(tool["hookSpecificOutput"]["permissionDecision"], "deny")
+        startup.assert_not_called()
 
     def test_startup_cache_recovers_clobbered_mutable_state(self):
         session_state.save_startup_cache("recovered", self.startup_payload())
@@ -429,7 +505,10 @@ class CodexHookTests(unittest.TestCase):
         self.assertFalse(result["continue"])
         self.assertIn("orientation cache is missing", result["stopReason"])
 
-    def test_material_tool_requires_durable_startup_cache(self):
+    @mock.patch.object(dispatcher.boswell_client, "startup")
+    def test_material_tool_requires_durable_startup_cache(self, startup):
+        startup.side_effect = dispatcher.boswell_client.BoswellUnavailable(
+            "Boswell rejected this machine's credential (HTTP 401)")
         session_state.save("orphaned-state", {"startup_loaded": True})
 
         result = dispatcher._pre_tool({

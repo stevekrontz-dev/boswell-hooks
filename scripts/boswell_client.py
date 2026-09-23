@@ -62,10 +62,10 @@ def _request(method: str, path: str, *, params: dict | None = None,
             f"Boswell transport failure: {type(exc).__name__}") from None
 
 
-def startup() -> dict:
+def startup(timeout: float | None = None) -> dict:
     return _request("GET", "/v2/startup", params={
         "verbosity": "warm", "agent_id": AGENT_ID, "timezone": TIMEZONE,
-    })
+    }, timeout=timeout)
 
 
 def search(query: str, limit: int = 5, timeout: float | None = None) -> dict:

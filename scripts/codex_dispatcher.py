@@ -61,6 +61,22 @@ ORIENTATION_HEADER = (
 )
 
 
+# A SessionStart that never completed used to halt the thread for its whole
+# life: the host killed the hook at its timeout during a machine-wide I/O stall
+# (or Boswell was briefly unreachable), no cache was written, and every later
+# prompt and material tool then failed closed with nothing ever retrying.
+# Recovery performs the single startup that SessionStart owed, bounded so it
+# fits inside the smaller PreToolUse budget, and backs off so a real outage
+# does not turn every event into a network wait. An explicit startup_loaded of
+# False is a safety verdict (over-budget orientation) and is never retried.
+STARTUP_RECOVERY_BACKOFF_SECONDS = 20.0
+PRE_TOOL_RECOVERY_TIMEOUT = 6.0
+RECOVERY_NOTICE = (
+    "Boswell continuity recovered: SessionStart had not completed for this "
+    "session, so the startup receipt is injected now."
+)
+
+
 class OrientationBudgetExceeded(RuntimeError):
     pass
 
@@ -331,6 +347,76 @@ def _session_start(data: dict) -> dict:
     return _context("SessionStart", orientation)
 
 
+def _recover_startup(sid: str | None, state: dict, *,
+                     timeout: float | None = None) -> tuple[dict | None, str | None]:
+    """Perform the one startup SessionStart owed but never delivered.
+
+    Returns (payload, None) on success after the durable cache and mutable
+    state are written, or (None, reason) when Boswell refused, was unreachable,
+    or the last attempt was too recent.
+    """
+    now = time.time()
+    last_attempt = float(state.get("startup_recovery_at", 0))
+    if now - last_attempt < STARTUP_RECOVERY_BACKOFF_SECONDS:
+        return None, (
+            "startup recovery already attempted "
+            f"{int(now - last_attempt)}s ago; retrying shortly"
+        )
+    state["startup_recovery_at"] = now
+    state["startup_recovery_attempts"] = int(state.get("startup_recovery_attempts", 0)) + 1
+    try:
+        payload = boswell_client.startup(timeout=timeout)
+    except boswell_client.BoswellUnavailable as exc:
+        session_state.save(sid, state)
+        return None, str(exc)
+    session_state.save_startup_cache(sid, payload)
+    state["startup_loaded"] = True
+    state["startup_loaded_at"] = now
+    state["startup_calls"] = int(state.get("startup_calls", 0)) + 1
+    state["startup_recovered"] = True
+    state.setdefault("mutations", [])
+    state.setdefault("verifications", [])
+    state.setdefault("closed_mutation_seq", 0)
+    session_state.save(sid, state)
+    return payload, None
+
+
+def _recovered_context(event: str, sid: str | None, state: dict, cached: dict) -> dict:
+    try:
+        orientation = _orientation(cached)
+    except OrientationBudgetExceeded as exc:
+        state["startup_loaded"] = False
+        session_state.save(sid, state)
+        return _stop(f"Boswell startup orientation exceeded its safety budget: {exc}")
+    return _context(event, orientation, system_message=RECOVERY_NOTICE)
+
+
+def prompt_startup_gate(data: dict) -> dict | None:
+    """Shared prompt-time continuity gate for the Codex and Claude adapters.
+
+    Returns None when the session already holds its durable startup receipt.
+    Otherwise it recovers the missing startup and returns the receipt as
+    prompt context, or a fail-closed stop when recovery is impossible.
+    """
+    sid = data.get("session_id")
+    state = session_state.load(sid)
+    if state.get("startup_loaded") is False:
+        return _stop("Boswell was not loaded at SessionStart; this prompt cannot proceed safely.")
+    cached = session_state.load_startup_cache(sid)
+    if not state.get("startup_loaded") or cached is None:
+        cached, reason = _recover_startup(sid, state)
+        if cached is None:
+            return _stop(
+                "Boswell startup continuity is missing for this session and "
+                f"recovery failed; this prompt cannot proceed safely: {reason}"
+            )
+        return _recovered_context("UserPromptSubmit", sid, state, cached)
+    if state.pop("orientation_pending", None):
+        session_state.save(sid, state)
+        return _recovered_context("UserPromptSubmit", sid, state, cached)
+    return None
+
+
 def _prompt_text(data: dict) -> str:
     for key in ("prompt", "user_prompt", "content"):
         value = data.get(key)
@@ -399,13 +485,14 @@ def _automatic_context_candidate(item: object, rank: int = 0) -> dict | None:
 
 
 def _user_prompt(data: dict) -> dict | None:
+    gate = prompt_startup_gate(data)
+    if gate is not None:
+        return gate
     prompt = _prompt_text(data)
     if not session_state.retrieval_eligible(prompt):
         return None
     sid = data.get("session_id")
     state = session_state.load(sid)
-    if not state.get("startup_loaded"):
-        return _stop("Boswell was not loaded at SessionStart; this prompt cannot proceed safely.")
     fingerprint = hashlib.sha256(prompt.strip().encode("utf-8")).hexdigest()
     if fingerprint == state.get("last_prompt_fingerprint"):
         return None
@@ -480,10 +567,22 @@ def _pre_tool(data: dict) -> dict | None:
     requires_startup = tool in MATERIAL_TOOLS or "boswell_commit" in tool
     durable_startup = session_state.load_startup_cache(sid) is not None
     if requires_startup and (not state.get("startup_loaded") or not durable_startup):
-        return _deny(
-            "Boswell startup continuity is incomplete for this session. "
-            "Load continuity before acting."
-        )
+        if state.get("startup_loaded") is False:
+            return _deny(
+                "Boswell startup continuity is incomplete for this session. "
+                "Load continuity before acting."
+            )
+        cached, reason = _recover_startup(
+            sid, state, timeout=PRE_TOOL_RECOVERY_TIMEOUT)
+        if cached is None:
+            return _deny(
+                "Boswell startup continuity is incomplete for this session and "
+                f"recovery failed ({reason}). Load continuity before acting."
+            )
+        # The receipt itself belongs in the model context; deliver it on the
+        # next prompt rather than inside a tool-permission decision.
+        state["orientation_pending"] = True
+        session_state.save(sid, state)
 
     oversized_deletes = _oversized_apply_patch_deletes(data)
     if oversized_deletes:

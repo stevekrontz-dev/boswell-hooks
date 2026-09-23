@@ -73,9 +73,15 @@ class ClaudeStartupTests(unittest.TestCase):
 
     def test_prompt_is_stopped_when_structural_startup_receipt_is_missing(self):
         output = io.StringIO()
+        import boswell_client
         with (
             mock.patch("session_state.load", return_value={}),
             mock.patch("session_state.load_startup_cache", return_value=None),
+            mock.patch("session_state.save"),
+            mock.patch(
+                "boswell_client.startup",
+                side_effect=boswell_client.BoswellUnavailable("Boswell transport failure: TimeoutError"),
+            ) as recovery,
             mock.patch("prompt_retrieval.evaluate") as retrieval,
             contextlib.redirect_stdout(output),
         ):
@@ -87,6 +93,7 @@ class ClaudeStartupTests(unittest.TestCase):
         result = json.loads(output.getvalue())
         self.assertFalse(result["continue"])
         self.assertIn("startup continuity is missing", result["stopReason"])
+        recovery.assert_called_once()
         retrieval.assert_not_called()
 
 

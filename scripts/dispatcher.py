@@ -115,22 +115,20 @@ def _user_prompt(data):
     # a real Boswell search on the prompt and injects the hits, so the model
     # gets data it does not have rather than an instruction it will skim. That
     # distinction is the whole point of structural hook design.
+    # The shared gate recovers a session whose SessionStart never completed
+    # (host timeout during an I/O stall, brief outage) by performing the one
+    # startup it owed and returning the receipt; otherwise it fails closed.
     try:
-        import session_state
-        sid = data.get("session_id")
-        ready = (
-            session_state.load(sid).get("startup_loaded")
-            and session_state.load_startup_cache(sid) is not None
-        )
+        import codex_dispatcher
+        gate = codex_dispatcher.prompt_startup_gate(data)
     except Exception:
-        ready = False
-    if not ready:
-        result = {
+        gate = {
             "continue": False,
             "stopReason": "Boswell startup continuity is missing for this session.",
             "systemMessage": "Boswell startup continuity is missing for this session.",
         }
-        sys.stdout.write(json.dumps(result))
+    if gate is not None:
+        sys.stdout.write(json.dumps(gate, ensure_ascii=True))
         return
     try:
         import prompt_retrieval
