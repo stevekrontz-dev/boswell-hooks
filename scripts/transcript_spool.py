@@ -50,14 +50,17 @@ def capture(data: dict, event: str) -> dict | None:
         return None
     session_id = str(data.get("session_id") or source.stem)
     safe_id = safe_session_id(session_id)
+    client = "claude" if data.get("client") == "claude" else "codex"
+    label = "Claude Code" if client == "claude" else "Codex"
     month = datetime.now().strftime("%Y-%m")
     archive_dir = ARCHIVE_ROOT / MACHINE / month
     archive_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix or ".jsonl"
-    archive = archive_dir / f"codex-{safe_id}{suffix}"
+    archive = archive_dir / f"{client}-{safe_id}{suffix}"
     shutil.copy2(source, archive)
     card = {
-        "authored_by": "Codex (home)",
+        "authored_by": f"{label} (home)",
+        "client": client,
         "session_id": session_id,
         "machine": MACHINE,
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -67,7 +70,7 @@ def capture(data: dict, event: str) -> dict | None:
         "byte_count": archive.stat().st_size,
         "sha256": _sha256(archive),
         "archive_path": str(archive),
-        "format_note": "Raw Codex transcript archived without parsing; transcript schema is unstable.",
+        "format_note": "Raw client transcript archived without parsing; transcript schema is unstable.",
     }
     queue = _read_queue()
     previous = queue.get(session_id, {}).get("index_card", {})
@@ -89,13 +92,15 @@ def flush_pending(*, exclude_session_id: str | None = None) -> tuple[int, int]:
         if not isinstance(card, dict):
             continue
         try:
+            client = "claude" if card.get("client") == "claude" else "codex"
+            label = "Claude Code" if client == "claude" else "Codex"
             boswell_client.commit(
                 branch="transcripts",
                 content=card,
                 content_type="transcript",
-                message=(f"TRANSCRIPT: Codex {session_id[:8]} ({card.get('machine')}, "
+                message=(f"TRANSCRIPT: {label} {session_id[:8]} ({card.get('machine')}, "
                          f"{card.get('byte_count', '?')} bytes)"),
-                tags=["transcript", "codex-session", str(card.get("machine", MACHINE))],
+                tags=["transcript", f"{client}-session", str(card.get("machine", MACHINE))],
             )
             committed += 1
         except boswell_client.BoswellUnavailable:

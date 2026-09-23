@@ -304,7 +304,7 @@ def _session_end(data):
 
 def _pre_compact(data):
     import codex_dispatcher
-    result=codex_dispatcher._pre_compact(data)
+    result=codex_dispatcher._pre_compact({**data,"client":"claude"})
     if result is not None:
         sys.stdout.write(json.dumps(result,ensure_ascii=True))
 
