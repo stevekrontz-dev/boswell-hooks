@@ -34,7 +34,7 @@ class WorkStateLifecycleTests(unittest.TestCase):
             first = dispatcher._session_start({"session_id": "example-session", "source": "startup"})
             text = first["hookSpecificOutput"]["additionalContext"]
             self.assertEqual(json.loads(text.split("\n", 1)[1])["work_state"]["summary"]["unfinished_count"], 7)
-            for source in ("resume", "startup", "compact"):
+            for source in ("resume", "startup"):
                 self.assertIsNone(dispatcher._session_start({"session_id": "example-session", "source": source}))
             cleared = dispatcher._session_start({"session_id": "example-session", "source": "clear"})
             self.assertEqual(cleared["hookSpecificOutput"]["additionalContext"], text)

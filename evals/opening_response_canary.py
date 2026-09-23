@@ -39,7 +39,7 @@ def context():
     }) + "\n" + opening_briefing.OPENING_CONTRACT
 
 
-def run(client, root, prompt_context):
+def run(client, root, prompt_context, prompt="good afternoon"):
     work = root / client
     work.mkdir()
     env = dict(os.environ)
@@ -63,11 +63,11 @@ def run(client, root, prompt_context):
             for key in ("model", "model_reasoning_effort"):
                 if isinstance(config.get(key), str):
                     cmd.extend(["-c", key + "=" + json.dumps(config[key])])
-        cmd.append("good afternoon")
+        cmd.append(prompt)
     else:
         mcp = work / "mcp.json"
         mcp.write_text('{"mcpServers":{}}', encoding="utf-8")
-        cmd = [shutil.which("claude"), "-p", "good afternoon", "--tools", "",
+        cmd = [shutil.which("claude"), "-p", prompt, "--tools", "",
                "--setting-sources", "", "--strict-mcp-config", "--mcp-config", str(mcp),
                "--no-session-persistence", "--output-format", "json",
                "--system-prompt", "You are an assistant collaborating with the operator.\n" + prompt_context]

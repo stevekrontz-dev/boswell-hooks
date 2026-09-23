@@ -465,24 +465,24 @@ class CodexHookTests(unittest.TestCase):
         })
         self.assertFalse(session_state.load("c2").get("boswell_read_tokens"))
 
-    def test_postcompact_validates_cache_without_injecting_context(self):
+    def test_postcompact_requires_progress_in_addition_to_startup_cache(self):
         session_state.save_startup_cache("long-session", self.startup_payload())
 
         for _ in range(10):
-            self.assertIsNone(dispatcher._post_compact({
+            self.assertFalse(dispatcher._post_compact({
                 "session_id": "long-session",
                 "trigger": "auto",
-            }))
+            })['continue'])
 
     @mock.patch.object(dispatcher.boswell_client, "startup")
-    def test_compact_session_start_reuses_cache_without_context(self, startup):
+    def test_compact_session_start_never_replays_startup_when_progress_missing(self, startup):
         session_state.save_startup_cache("compact-session", self.startup_payload())
 
         for _ in range(10):
-            self.assertIsNone(dispatcher._session_start({
+            self.assertFalse(dispatcher._session_start({
                 "session_id": "compact-session",
                 "source": "compact",
-            }))
+            })['continue'])
         startup.assert_not_called()
 
     @mock.patch.object(dispatcher.boswell_client, "startup")

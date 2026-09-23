@@ -341,7 +341,7 @@ def _session_start(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dic
     if source == "compact":
         if cached is None:
             return _stop("Boswell orientation cache is missing after compaction.")
-        return None
+        return _restore_progress(data, "SessionStart")
     # Codex can deliver more than one thread-start hook when a long session is
     # resumed.  The original SessionStart context is already in the transcript,
     # so replaying it on every cached startup/resume only duplicates developer
@@ -735,6 +735,11 @@ def _post_tool(data: dict) -> None:
 
 
 def _pre_compact(data: dict) -> dict:
+    import compaction_progress
+    try:
+        compaction_progress.prepare(data)
+    except Exception as exc:
+        return _stop(f"Boswell progress checkpoint failed before compaction: {exc}")
     sid = data.get("session_id")
     state = session_state.load(sid)
     state["precompact_at"] = time.time()
@@ -744,14 +749,23 @@ def _pre_compact(data: dict) -> dict:
         transcript_spool.capture(data, "precompact")
     except Exception:
         pass
-    return {"continue": True, "systemMessage": "Boswell checkpoint staged before compaction."}
+    return {"continue": True, "systemMessage": "Boswell evidence-backed progress checkpoint saved before compaction."}
+
+
+def _restore_progress(data, event):
+    import compaction_progress
+    try:
+        text=compaction_progress.restore(data)
+        return _context(event,text) if text else None
+    except Exception as exc:
+        return _stop(f"Boswell progress restoration failed: {exc}")
 
 
 def _post_compact(data: dict) -> dict | None:
     cached = session_state.load_startup_cache(data.get("session_id"))
     if not cached:
         return _stop("Boswell orientation cache is missing after compaction.")
-    return None
+    return _restore_progress(data, "PostCompact")
 
 
 def _subagent_start(data: dict) -> dict | None:

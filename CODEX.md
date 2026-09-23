@@ -30,6 +30,37 @@ silent, `clear` reinjects the cached orientation into the new context without
 another network startup, and compaction validates the cache without replaying
 the briefing.
 
+## Compaction progress
+
+`PreCompact` writes a separate session-bound progress checkpoint from host
+transcript events. It retains the root objective and current subtask when
+recorded, request/reply history, user directions, agent ownership and completed
+handoffs, running process IDs, scoped tool receipts, and the last recorded next
+action. Successful Boswell progress bookmarks can supply semantic fields;
+without them the checkpoint marks the objective or next action as uncertain
+and carries recent stated work instead of inventing a plan.
+
+Agent plans and reports remain historical claims. They do not create human
+authorization or approval requirements. Host-generated messages, external tool
+prose, and copied compaction histories are excluded from human directions.
+Event timestamps stay separate from session start and checkpoint time.
+
+`PostCompact` or `SessionStart(source=compact)` restores the checkpoint once
+under a cross-process lock, without startup replay. The host provides no
+delivery acknowledgment: marking before output prevents duplicates, but a
+process failure between that mark and delivery can lose the injection. Missing,
+invalid, over-budget, or failed checkpoints produce an explicit failure.
+
+The injected view is capped at 8,500 characters. Repeated citations and excerpts
+are compacted before optional recent-operation receipts are omitted; agent
+ownership and settled request records are retained. Full captured evidence and
+source offsets/hashes remain in the checkpoint file. The collector bounds a
+scan to 512 MiB and an individual JSONL event to 8 MiB; exceeding either reports
+failure rather than silently treating partial history as complete.
+
+This protects recorded continuity. It does not certify semantic correctness,
+live conditions, phone behavior, or all historical session schemas.
+
 If the hook receipt is absent because the plugin did not run, client-level
 instructions may call `boswell_startup` once as a fallback. That fallback is
 never a per-message ritual.

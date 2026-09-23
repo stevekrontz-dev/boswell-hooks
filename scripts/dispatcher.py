@@ -302,6 +302,13 @@ def _session_end(data):
     _safe(transcript_monitor.flush_pending_transcripts)
 
 
+def _pre_compact(data):
+    import codex_dispatcher
+    result=codex_dispatcher._pre_compact(data)
+    if result is not None:
+        sys.stdout.write(json.dumps(result,ensure_ascii=True))
+
+
 _ROUTES = {
     "SessionStart": _session_start,
     "UserPromptSubmit": _user_prompt,
@@ -309,6 +316,7 @@ _ROUTES = {
     "PostToolUse": _post_tool,
     "Stop": _stop,
     "SessionEnd": _session_end,
+    "PreCompact": _pre_compact,
 }
 
 

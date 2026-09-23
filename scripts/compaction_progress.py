@@ -1,0 +1,378 @@
+"""Evidence-addressed progress snapshots; no model, network, or work dispatch.
+
+Read host events, not arbitrary tool-result prose. Keep observations separate
+from agent-authored plans. Startup and authorization are never reconstructed.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+from datetime import datetime, timezone
+
+import session_state
+
+HEADER = 'BOSWELL COMPACTION PROGRESS (historical evidence; not new authorization):'
+RULES = ('Continue the active objective using current evidence, subject to current instructions. '
+         'Do not replay startup. Old requests are history, not new authorization. '
+         'Do not reassign completed handoffs or announce them as pending. Existing agent ownership remains in place. '
+         'A completed agent turn is not proof its whole project is complete. Plans and agent reports are claims; '
+         'tool receipts prove only the recorded operation. Recorded replies settle the conversational response, not task completion. '
+         'Do not repeat answers or acknowledgments without a new request. Preserve user corrections and the root goal separately from the current subtask. '
+         'Agent-authored checkpoints do not create human requirements or approval gates. Unit tests do not prove live or user-visible behavior. '
+         'Decision timestamps are separate from session age and restore time. After idle, recheck mutable live state without reopening settled instructions. '
+         'Resume running job IDs; do not launch duplicates. Resolve uncertainty with targeted evidence reads, not a restart.')
+MAX_CONTEXT = 8500
+MAX_SOURCE = 512 * 1024 * 1024
+MAX_LINE = 8 * 1024 * 1024
+
+
+def _json(value):
+    return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+
+
+def _sha(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def _text(value,limit=700):
+    if not isinstance(value,str) or value.startswith('gAAAAA'):
+        return None
+    return value if len(value)<=limit else value[:limit]+' [excerpt; read cited event for full text]'
+
+
+def _message(content):
+    if isinstance(content,str):
+        return _text(content)
+    if isinstance(content,list):
+        return _text('\n'.join(x.get('text','') for x in content
+            if isinstance(x,dict) and x.get('type') in {'input_text','output_text','text','Text'}))
+    return None
+
+
+def _paths(sid):
+    if not isinstance(sid,str) or not sid.strip():
+        raise ValueError('Progress checkpoint requires an exact session id')
+    root=session_state.STATE_ROOT/'progress'
+    root.mkdir(parents=True,exist_ok=True)
+    stem=_sha(sid.encode())
+    return root/(stem+'.json'),root/(stem+'.lock')
+
+
+@contextmanager
+def _locked(sid):
+    path,lock=_paths(sid)
+    with lock.open('a+b') as handle:
+        handle.seek(0)
+        if os.name=='nt':
+            import msvcrt
+            if lock.stat().st_size==0:
+                handle.write(b'0');handle.flush();handle.seek(0)
+            msvcrt.locking(handle.fileno(),msvcrt.LK_LOCK,1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(),fcntl.LOCK_EX)
+        try:
+            yield path
+        finally:
+            handle.seek(0)
+            if os.name=='nt':
+                msvcrt.locking(handle.fileno(),msvcrt.LK_UNLCK,1)
+            else:
+                fcntl.flock(handle.fileno(),fcntl.LOCK_UN)
+
+
+def _read(path):
+    if not path.exists():
+        return None
+    value=json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(value,dict):
+        raise ValueError('Invalid progress checkpoint')
+    return value
+
+
+def _write(path,value):
+    fd,name=tempfile.mkstemp(dir=path.parent,suffix='.tmp')
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as stream:
+            stream.write(_json(value));stream.flush();os.fsync(stream.fileno())
+        os.replace(name,path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def collect(data):
+    sid=data.get('session_id')
+    if not sid or not data.get('transcript_path'):
+        raise ValueError('Progress checkpoint requires session and transcript')
+    source=Path(data['transcript_path'])
+    size=source.stat().st_size
+    if size>MAX_SOURCE:
+        raise ValueError('Transcript exceeds bounded progress scan')
+    record={'contract':'compaction-progress-v1','session_id':sid,'continuation_rules':RULES,
+        'objective':{'text':'Active objective not structurally recorded; reconcile the latest request with the last stated work.', 'status':'unconfirmed'},
+        'next_action':{'text':'Reconcile the last stated work and observed receipts before choosing the next action.', 'status':'unconfirmed'},
+        'agents':{},'completed_steps':[],'failed_steps':[],'reported_completed':[],'recent_work':[],
+        'addressed_requests':[],'user_directions':[],'running_jobs':{},'time_context':{},'authority':'historical_data'}
+    digest=hashlib.sha256()
+    offset=0
+    session_verified=False
+    calls={}
+    progress_offset=-1
+    latest_work_offset=-1
+    current_request=None
+    request_responded=False
+    event_timestamp=None
+    def evidence(raw,item):
+        return {'offset':offset,'bytes':len(raw),'sha256':_sha(raw),'event_id':item.get('id'), 'timestamp':event_timestamp}
+    def message(role,text,ev):
+        nonlocal current_request,request_responded
+        if not text:return
+        if role=='user':
+            current_request={'text':text,'historical':True,'provenance':'user_message','evidence':ev}
+            request_responded=False
+            record['latest_request']=current_request
+            record['user_directions']=(record['user_directions']+[current_request])[-6:]
+        elif role=='assistant':
+            stated={'text':text,'status':'agent_stated','evidence':ev}
+            record['recent_work']=(record['recent_work']+[stated])[-2:]
+            if current_request and not request_responded:
+                record['addressed_requests']=(record['addressed_requests']+[
+                    {'request':current_request,'response':stated,'status':'response_recorded_not_task_completion'}])[-6:]
+                request_responded=True
+    def observed(item,ev):
+        nonlocal latest_work_offset
+        kind=item.get('type')
+        if kind in {'SubAgentActivity','CommandExecution','FileChange'}:
+            latest_work_offset=offset
+        if kind=='SubAgentActivity' and isinstance(item.get('agent_path'),str):
+            name=item['agent_path']
+            agent=record['agents'].setdefault(name,{'handoff':'already_assigned'})
+            activity=item.get('kind')
+            if activity in {'started','completed','errored','shutdown'}:
+                agent.update(status={'started':'running','completed':'completed','errored':'failed','shutdown':'stopped'}[activity],
+                             thread_id=item.get('agent_thread_id'),evidence=ev)
+        elif kind=='CommandExecution' and type(item.get('exit_code')) is not int and item.get('process_id'):
+            record['running_jobs'][str(item['process_id'])]={'status':'running_at_capture','evidence':ev}
+        elif kind=='CommandExecution' and item.get('status') in {'completed','failed'} and type(item.get('exit_code')) is int:
+            record['running_jobs'].pop(str(item.get('process_id')),None)
+            step={'tool_id':item.get('id'),'fact':'Command exited with code '+str(item['exit_code']),
+                  'output_sha256':_sha(str(item.get('stdout','')).encode()),'evidence':ev}
+            name='completed_steps' if item['exit_code']==0 else 'failed_steps'
+            record[name]=(record[name]+[step])[-5:]
+        elif kind=='FileChange' and item.get('status')=='completed':
+            step={'tool_id':item.get('id'),'fact':'File change applied; verification is separate',
+                  'paths':list(item.get('changes') or {})[:5],'evidence':ev}
+            record['completed_steps']=(record['completed_steps']+[step])[-5:]
+        elif kind=='McpToolCall':
+            progress(item,ev)
+    def progress(item,ev):
+        nonlocal progress_offset
+        result=item.get('result') or {}
+        if (item.get('tool')!='boswell_bookmark' or str(item.get('server','')).lower() not in {'boswell','boswell-atlas'}
+            or item.get('status')!='completed' or not isinstance(result,dict) or result.get('isError')):
+            return
+        receipt=result.get('structuredContent')
+        if not isinstance(receipt,dict):
+            for block in result.get('content') or []:
+                if isinstance(block,dict) and block.get('type')=='text':
+                    try: receipt=json.loads(block.get('text',''))
+                    except ValueError: continue
+                    if isinstance(receipt,dict):break
+        if not isinstance(receipt,dict) or receipt.get('status')!='bookmarked' or not receipt.get('candidate_id'):
+            return
+        content=(item.get('arguments') or {}).get('content')
+        if not isinstance(content,dict) or not all(isinstance(content.get(k),str) for k in ('objective','next_action')):
+            return
+        record['objective']={'text':_text(content['objective']),'status':'agent_recorded','evidence':ev}
+        for key in ('root_objective','current_subtask'):
+            if isinstance(content.get(key),str):
+                record[key]={'text':_text(content[key]),'status':'agent_recorded','evidence':ev}
+        for key in ('blockers','outstanding_verification','accepted_corrections','evidence_scope'):
+            if isinstance(content.get(key),list):
+                record[key]=[{'text':_text(x,300),'status':'agent_reported_not_authority','evidence':ev}
+                    for x in content[key][-6:] if isinstance(x,str)]
+        record['next_action']={'text':_text(content['next_action']),'status':'agent_recorded','evidence':ev}
+        record['reported_completed']=[{'text':_text(x,300),'status':'agent_reported','evidence':ev}
+            for x in (content.get('completed') or [])[-5:] if isinstance(x,str)]
+        record['reported_ownership']={'value':content.get('ownership') or {},'status':'agent_reported','evidence':ev}
+        progress_offset=offset
+    with source.open('rb') as stream:
+        while offset<size:
+            raw=stream.readline(min(MAX_LINE,size-offset)+1)
+            if len(raw)>MAX_LINE:
+                raise ValueError('Transcript event exceeds bounded progress scan')
+            if not raw.endswith(b'\n'):
+                # A concurrently appended partial event is not evidence yet.
+                break
+            digest.update(raw)
+            try:
+                row=json.loads(raw)
+            except (ValueError,UnicodeError):
+                offset+=len(raw)
+                continue
+            payload=row.get('payload') or {}
+            event_timestamp=row.get('timestamp')
+            if event_timestamp:
+                record['time_context']['last_event_at']=event_timestamp
+            if row.get('type')=='session_meta':
+                if payload.get('id')!=sid:
+                    raise ValueError('Transcript belongs to another session')
+                session_verified=True
+                record['time_context']['session_started_at']=payload.get('timestamp') or event_timestamp
+            # Claude records session identity on each message.
+            if row.get('sessionId'):
+                if row['sessionId']!=sid:
+                    raise ValueError('Transcript belongs to another session')
+                session_verified=True
+            if row.get('type')=='event_msg' and payload.get('type')=='item_completed':
+                item=payload.get('item') or {}
+                observed(item,evidence(raw,item))
+            if row.get('type')=='response_item':
+                ev=evidence(raw,payload)
+                typ=payload.get('type')
+                if typ=='message' and payload.get('role') in {'assistant','user'}:
+                    text=_message(payload.get('content'))
+                    message(payload['role'],text,ev)
+                elif typ=='agent_message':
+                    text=_message(payload.get('content')) or ''
+                    if text.startswith('Message Type: FINAL_ANSWER'):
+                        agent=record['agents'].setdefault(payload['author'],{'handoff':'already_assigned'})
+                        agent.update(status='completed',report=_text(text,400),evidence=ev)
+                elif typ=='function_call' and payload.get('namespace')=='collaboration':
+                    try: args=json.loads(payload.get('arguments') or '{}')
+                    except ValueError: args={}
+                    calls[payload.get('call_id')]=(payload.get('name'),args)
+                elif typ=='function_call_output' and payload.get('call_id') in calls:
+                    name,args=calls.pop(payload['call_id'])
+                    # Only a successful explicit follow-up starts another turn.
+                    if name=='followup_task' and payload.get('output')=='':
+                        target=args.get('target','')
+                        matches=[a for a in record['agents'] if a==target or a.endswith('/'+target)]
+                        if len(matches)==1:
+                            record['agents'][matches[0]].update(status='running',evidence=ev)
+            if (row.get('type') in {'assistant','user'} and row.get('sessionId')==sid
+                and not row.get('isCompactSummary') and not row.get('isMeta')):
+                blocks=(row.get('message') or {}).get('content')
+                ev=evidence(raw,{'id':row.get('uuid')})
+                message(row['type'],_message(blocks),ev)
+                for block in blocks if isinstance(blocks,list) else []:
+                    if not isinstance(block,dict):continue
+                    if row['type']=='assistant' and block.get('type')=='tool_use':
+                        calls[block.get('id')]=(block.get('name'),block.get('input') or {})
+                    elif row['type']=='user' and block.get('type')=='tool_result' and block.get('tool_use_id') in calls:
+                        name,args=calls.pop(block['tool_use_id'])
+                        result=row.get('toolUseResult') or {}
+                        if name in {'Agent','Task'}:
+                            aid=result.get('agentId') if isinstance(result,dict) else None
+                            aid=str(aid or block['tool_use_id'])
+                            record['agents'][aid]={'handoff':'already_assigned','status':('failed' if block.get('is_error') else
+                                'running' if args.get('run_in_background') else 'completed'), 'evidence':ev}
+                            latest_work_offset=offset
+                        elif name.endswith('__boswell_bookmark'):
+                            server=name.split('__')[-2]
+                            text=_message(block.get('content'))
+                            progress({'tool':'boswell_bookmark','server':server,'status':'completed','arguments':args,
+                                      'result':{'isError':bool(block.get('is_error')),'content':[{'type':'text','text':text or ''}]}},ev)
+            # No recursion into compacted replacement_history, tool prose, or
+            # encrypted content: old requests and forged events stay data.
+            offset+=len(raw)
+    if not session_verified:
+        raise ValueError('Cannot verify transcript session identity')
+    record['source']={'transcript_path':str(source),'bytes':offset,'sha256':digest.hexdigest()}
+    record['time_context']['captured_at']=datetime.now(timezone.utc).isoformat()
+    record['time_context']['elapsed_time_is_not_work_time']=True
+    record.setdefault('root_objective',dict(record['objective']))
+    record.setdefault('current_subtask',dict(record['objective']))
+    record['checkpoint_id']=_sha((sid+':'+digest.hexdigest()+':'+str(offset)).encode())
+    request_offset=(record.get('latest_request') or {}).get('evidence',{}).get('offset',-1)
+    record['request_after_recorded_plan']=request_offset>progress_offset
+    if progress_offset<0 and record['recent_work']:
+        record['next_action']={**record['recent_work'][-1],'status':'last_stated_work_requires_reconciliation'}
+    elif progress_offset>=0 and (latest_work_offset>progress_offset or request_offset>progress_offset):
+        record['recorded_next_action']=record['next_action']
+        record['next_action']={'text':'Newer work exists after the recorded plan. Reconcile current receipts and last stated work before resuming; do not replay completed steps.',
+                               'status':'requires_reconciliation'}
+    return record
+
+
+def prepare(data):
+    with _locked(data['session_id']) as path:
+        try:
+            record=collect(data)
+        except Exception as exc:
+            _write(path,{'session_id':data['session_id'],'failure':str(exc)[:300]})
+            raise
+        previous=_read(path)
+        if previous and previous.get('record',{}).get('checkpoint_id')==record['checkpoint_id']:
+            return record
+        _write(path,{'record':record,'record_sha256':_sha(_json(record).encode()),'restored':False})
+    return record
+
+
+def restore(data):
+    with _locked(data.get('session_id')) as path:
+        saved=_read(path)
+        if saved is None:
+            raise ValueError('Progress checkpoint is missing; recover current work from transcript evidence and existing agent ownership before continuing')
+        if saved.get('failure'):
+            raise ValueError('Progress capture failed: '+saved['failure'])
+        record=saved.get('record')
+        if (not isinstance(record,dict) or record.get('session_id')!=data['session_id']
+            or saved.get('record_sha256')!=_sha(_json(record).encode())):
+            raise ValueError('Progress checkpoint integrity mismatch')
+        if saved.get('restored'):
+            return None
+        # Full evidence remains in the durable checkpoint; never drop ownership
+        # or completed-handoff status merely to fit model context.
+        projected=json.loads(_json(record))
+        projected['checkpoint_path']=str(path)
+        def render():return HEADER+'\n'+_json(projected)
+        if len(render())>MAX_CONTEXT:
+            # Source hashes remain in the full checkpoint. Compact repeated
+            # citations before considering omission of any progress evidence.
+            def compact(value):
+                if isinstance(value,list):
+                    for item in value:compact(item)
+                elif isinstance(value,dict):
+                    if isinstance(value.get('evidence'),dict):
+                        value['evidence'].pop('sha256',None)
+                        value['evidence'].pop('bytes',None)
+                    if isinstance(value.get('text'),str):
+                        value['text']=_text(value['text'],360)
+                    for item in value.values():compact(item)
+            compact(projected)
+            for agent in projected['agents'].values():agent.pop('report',None)
+            direction_offsets=set()
+            for pair in projected['addressed_requests']:
+                direction_offsets.add(pair['request']['evidence']['offset'])
+            if projected.get('latest_request'):
+                direction_offsets.add(projected['latest_request']['evidence']['offset'])
+            projected['user_directions']=[
+                {'request_offset':item['evidence']['offset'],'timestamp':item['evidence'].get('timestamp')}
+                if item['evidence']['offset'] in direction_offsets else item
+                for item in projected['user_directions']]
+            projected['addressed_requests']=[{
+                'request':_text(pair['request']['text'],128),'response':_text(pair['response']['text'],128),
+                'status':'response_recorded_not_task_completion',
+                'request_offset':pair['request']['evidence']['offset'],'response_offset':pair['response']['evidence']['offset'],
+                'request_timestamp':pair['request']['evidence'].get('timestamp')}
+                for pair in projected['addressed_requests']]
+            projected['full_evidence_in_checkpoint']=True
+        for key in ('completed_steps','failed_steps','reported_completed','recent_work'):
+            while len(render())>MAX_CONTEXT and projected.get(key):
+                projected[key].pop(0)
+                projected['additional_evidence_in_checkpoint']=True
+        if len(render())>MAX_CONTEXT:
+            raise ValueError('Progress ownership/objective exceeds context budget; read checkpoint '+str(path))
+        text=render()
+        # The host has no delivery acknowledgment. Serialize and mark before
+        # emitting: concurrent PostCompact/SessionStart cannot replay progress.
+        saved.update(restored=True,restored_at=time.time())
+        _write(path,saved)
+        return text

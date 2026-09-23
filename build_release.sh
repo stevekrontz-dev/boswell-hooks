@@ -32,6 +32,7 @@ RUNTIME_FILES=(
   boswell_client.py
   codex_config.py
   codex_dispatcher.py
+  compaction_progress.py
   config.py
   corrective_gate.py
   deploy_memory.py
