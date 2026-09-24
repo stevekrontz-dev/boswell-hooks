@@ -10,7 +10,7 @@ guards at the tool boundary, and queues transcripts durably.
 - A Boswell tenant
 - A tenant-scoped `bos_...` API key
 - Codex or Claude Code
-- Python 3.10+ for Codex; Python 3.9+ for the Claude adapter
+- Python 3.10+ for both hosts
 
 The runtime uses only Python's standard library.
 
@@ -82,6 +82,14 @@ For a machine that can access several tenants, store each key in
 A selected profile outranks `BOSWELL_API_KEY`; a missing selected profile
 fails closed instead of falling through to another tenant.
 
+`CODEX_HOME` and `CLAUDE_CONFIG_DIR` select the host profile, not the Boswell
+tenant. Confirm the intended account through a tenant-authenticated read such
+as `boswell_branches`, and ensure MCP and the hook process use the same tenant
+credential. Check selector names and configured key paths without printing keys.
+The `BOSWELL_HOOK_KEY_FILE` override changes the single-tenant key-file path;
+it does not override a selected named profile or `BOSWELL_API_KEY`. Use separate
+hook state and archive roots when testing multiple accounts on one machine.
+
 An invalid or unreadable tenant selector also fails closed. Each new session
 pins the selected credential fingerprint and service origin; changing either
 requires a fresh session. A session resumed from an older release without that
@@ -103,11 +111,8 @@ The public plugin accepts tenant-scoped API keys only.
 
 ## Codex
 
-Install `boswell-hooks` from the marketplace that publishes this repository:
-
-```powershell
-codex plugin add boswell-hooks@<marketplace>
-```
+Use the signed installer above with `--host codex`. It registers the verified
+package through Codex's native plugin manager.
 
 Open `/hooks`, inspect and trust the command hooks, then start a new thread.
 Codex loads lifecycle hooks only at thread startup. The root
@@ -116,17 +121,18 @@ Codex loads lifecycle hooks only at thread startup. The root
 
 ## Claude Code
 
-Use the release zip, or install the repository's `claude/` directory as the
-Claude plugin root. Do not use the repository root as the Claude root because
-both clients auto-discover a default `hooks/hooks.json`.
+Use the signed installer above with `--host claude-code`. It registers the
+verified package through Claude Code's native plugin manager. For developer
+checkouts only, `claude/` is the adapter root: both clients auto-discover a
+default `hooks/hooks.json`, so the repository root is not the Claude adapter.
 
 The packaged Claude artifact has a flat layout containing
 `.claude-plugin/`, `hooks/`, `scripts/`, and the public documentation.
-Reload plugins and begin a new session after installing an update.
+Begin a fresh session after installation or an update.
 
 If an agent is doing the install, hand it `AGENT-INSTALL.md` from the zip:
-it carries the preflight, the unzip target, the verification commands, and
-the rollback as a procedure.
+it carries the tenant preflight, signed installer procedure, verification, and
+explicit rollback procedure. Do not manually unzip into a skills directory.
 
 ## Configuration
 
@@ -144,18 +150,24 @@ the rollback as a procedure.
 | `BOSWELL_TRANSCRIPTS_ARCHIVE` | `~/boswell-transcripts` | Raw transcript archive |
 | `BOSWELL_HOOKS_FAIL_OPEN` | unset | Emergency diagnostic override |
 
-Startup, substantive retrieval, and pre-action continuity checks fail closed.
-Transcript capture and health telemetry queue locally on failure.
+Startup and pre-action continuity checks refuse material work without a valid
+receipt. Retrieval failures are reported; host callback behavior differs, so a
+reported failure is not universally a host-enforced stop. Tenant identity
+failures cannot enter the diagnostic fail-open path. Valid captured records
+remain queued if upload fails; invalid capture is rejected before queueing.
 
 ## Verify a checkout
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pytest tests --ignore=tests/test_protected_paths.py -q
+python tests/test_protected_paths.py
 python -m json.tool hooks/hooks.json
 python -m json.tool claude/hooks/hooks.json
 ```
 
-Build and inspect the Claude release artifact from Git Bash:
+These source tests require pytest; the installed runtime does not. Signed runtime
+ZIPs do not contain the test suite. For legacy developer-only Claude packaging
+from Git Bash (not the signed retail distribution):
 
 ```bash
 ./build_release.sh

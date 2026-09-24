@@ -89,7 +89,7 @@ never a per-message ritual.
 A `SessionStart` that never completes leaves no durable cache: the host can
 kill the hook at its timeout during a machine-wide I/O stall, or Boswell can be
 briefly unreachable. Such a session must not stay halted for its whole life.
-The next `UserPromptSubmit` or material `PreToolUse` performs the single
+With a valid session tenant binding, the next `UserPromptSubmit` or material `PreToolUse` performs the single
 startup that `SessionStart` owed, writes the same durable cache, and injects
 the receipt as prompt context (a tool-time recovery defers the receipt to the
 next prompt). Attempts back off for twenty seconds, the tool-time call is
@@ -139,6 +139,27 @@ fleet credential, persona, or private path. Tenant selection comes entirely
 from the machine-local API key or named profile. State, caches, and transcript
 queues remain machine-local.
 
-Startup and substantive retrieval fail closed. Transcript capture and health
-telemetry fail open into durable queues. `BOSWELL_HOOKS_FAIL_OPEN=1` exists
-only for emergency diagnosis.
+Host configuration roots (`CODEX_HOME` and `CLAUDE_CONFIG_DIR`) do not select a
+Boswell tenant. Named tenant profiles outrank environment keys and key files;
+invalid, unreadable, or missing selected profiles fail closed. Verify the
+authenticated intended tenant separately from key presence and host profile.
+
+Before handlers run, a fresh session pins its selected credential fingerprint
+and HTTPS service origin. Changed credentials or origins, and historical resumes
+without a binding, require a fresh session. A local binding does not authenticate
+the account; successful server startup is separate evidence. Identity failures
+cannot be overridden by the diagnostic fail-open setting.
+
+Capture validates the entire event-supplied transcript snapshot against its
+session identity before publishing it. Outbound entries carry their original
+credential/origin binding, rechecked before sending. Legacy unbound queues and
+entries from another credential remain quarantined, including after key rotation;
+never adopt or relabel them under a newly selected credential. These boundaries
+were introduced in 2.4.1; earlier releases are unsuitable rollback targets on a
+machine serving multiple tenants.
+
+Startup and material tool continuity checks require a valid receipt. Retrieval
+failures are reported; a host-enforced stop depends on the callback and client.
+Valid captured records remain queued when upload fails; invalid capture is
+rejected before queueing. `BOSWELL_HOOKS_FAIL_OPEN=1` exists only for emergency
+diagnosis and does not bypass tenant identity verification.
