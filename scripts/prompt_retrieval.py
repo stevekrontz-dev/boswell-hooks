@@ -153,6 +153,29 @@ def _context(text):
     }
 
 
+# The framing the model reads around retrieved rows. Module-level so the
+# hook-trust canary eval (evals/hook_trust_canary.py) injects byte-identical
+# text: an eval that paraphrased the wrapper would measure a different channel.
+MEMORY_PREAMBLE = (
+    "BOSWELL MEMORY for this turn — retrieved automatically from the "
+    "prompt, before you reasoned about it. These are stored claims "
+    "about tenant or project state, each frozen when it was recorded — "
+    "CHECK THE `age` FIELD. An old row is a claim about the past, not "
+    "current fact, and may since have been superseded by work these "
+    "results do not include. Prefer a recent row over an old one, "
+    "prefer live verification over both, and if your answer would "
+    "contradict one of these, say so explicitly:\n")
+
+
+def memory_context(rows):
+    """The UserPromptSubmit payload for a set of already-selected rows."""
+    import memory_cards
+    if any('card' in row for row in rows):
+        return _context(memory_cards.context(MEMORY_PREAMBLE, rows))
+    return _context(
+        MEMORY_PREAMBLE + json.dumps(rows, ensure_ascii=False, indent=1))
+
+
 def evaluate(data):
     """Return a UserPromptSubmit additionalContext payload, or None."""
     try:
@@ -257,16 +280,7 @@ def evaluate(data):
                 session_id, "prompt_retrieval",
                 prompt + " " + json.dumps(rows, ensure_ascii=False))
 
-        return _context(
-            "BOSWELL MEMORY for this turn — retrieved automatically from the "
-            "prompt, before you reasoned about it. These are stored claims "
-            "about tenant or project state, each frozen when it was recorded — "
-            "CHECK THE `age` FIELD. An old row is a claim about the past, not "
-            "current fact, and may since have been superseded by work these "
-            "results do not include. Prefer a recent row over an old one, "
-            "prefer live verification over both, and if your answer would "
-            "contradict one of these, say so explicitly:\n"
-            + json.dumps(rows, ensure_ascii=False, indent=1))
+        return memory_context(rows)
     except Exception:
         return None  # FAIL-OPEN
 

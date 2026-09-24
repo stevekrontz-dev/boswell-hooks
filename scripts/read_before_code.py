@@ -392,8 +392,8 @@ def _grounded(query_tokens, item):
     if not query_tokens or readstate is None:
         return True  # no basis to judge -> don't block on it
     try:
-        row_tokens = readstate.tokenize(
-            str(item.get("message") or "") + " " + str(item.get("content") or "")[:2000])
+        import memory_cards
+        row_tokens = readstate.tokenize(memory_cards.searchable_text(item))
     except Exception:
         return True
     # Fold trivial plurals before comparing. Measured cost of not doing this:
@@ -500,8 +500,8 @@ def _ground_strength(query_tokens, item):
     if not query_tokens or readstate is None:
         return 0.0
     try:
-        row_tokens = readstate.tokenize(
-            str(item.get("message") or "") + " " + str(item.get("content") or "")[:2000])
+        import memory_cards
+        row_tokens = readstate.tokenize(memory_cards.searchable_text(item))
     except Exception:
         return 0.0
     overlap = (_fold(query_tokens) & _fold(row_tokens)) - _GENERIC_LONG
@@ -591,6 +591,12 @@ def _slim(item, rank, query_tokens=None):
     """
     if not isinstance(item, dict):
         return None
+    import memory_cards
+    card=memory_cards.card_of(item)
+    if 'card' in item and card is None:
+        return None
+    if card is not None:
+        item={**item,'content':card['text']}
     if str(item.get("content_type") or "memory").lower() in EXCLUDED_TYPES:
         return None
     # Relevance floor: an index row with no conversation in it is metadata
@@ -620,6 +626,9 @@ def _slim(item, rank, query_tokens=None):
             return None
         score = "lexical"
 
+    if card is not None:
+        return {'card':card,'recorded':str(item.get('created_at') or '')[:19] or 'unknown',
+                'age':_age(item.get('created_at')),'match':score}
     return {
         "message": item.get("message"),
         "commit": str(item.get("commit_hash") or "")[:12],
@@ -728,6 +737,8 @@ def evaluate(data):
                       "parallel surface duplicates whatever funnel/flow the "
                       "existing one owns, and the two then drift.")
             if rows:
+                import memory_cards
+                parts.append(memory_cards.GUIDANCE)
                 parts.append(
                     "BOSWELL PRIOR STATE (path-matched; may be loose — the "
                     "governing decision is often NOT retrievable from a new "
@@ -739,6 +750,9 @@ def evaluate(data):
         if not rows:
             return None
 
+        import memory_cards
+        if any('card' in row for row in rows):
+            return _context(memory_cards.context('BOSWELL PRIOR STATE for '+Path(target).name, rows))
         return _context(
             "BOSWELL PRIOR STATE for " + Path(target).name + " — retrieved "
             "automatically because this session had not read Boswell on this "

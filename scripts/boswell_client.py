@@ -70,6 +70,8 @@ def startup(timeout: float | None = None) -> dict:
     response = _request("GET", "/v2/startup", params={
         "verbosity": "warm", "agent_id": AGENT_ID, "timezone": TIMEZONE,
     }, timeout=budget)
+    if isinstance(response.get('work_briefing'), dict) and response['work_briefing'].get('contract') == 'cards-v1':
+        return response
     remaining = budget - (time.monotonic() - started)
     if remaining <= 0:
         raise BoswellUnavailable("startup work briefing exceeded its time budget")

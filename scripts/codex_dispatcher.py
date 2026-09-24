@@ -155,6 +155,13 @@ def _legacy_task(task: object, *, assigned: bool = False) -> dict | None:
 
 
 def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> str:
+    import memory_cards
+    try:
+        card_context=memory_cards.orient(payload,ORIENTATION_HEADER,max_chars)
+    except ValueError as exc:
+        raise OrientationBudgetExceeded(str(exc)) from exc
+    if card_context is not None:
+        return card_context
     continuity = payload.get("continuity")
     if isinstance(continuity, dict):
         projection = {
@@ -474,6 +481,10 @@ def _automatic_context_candidate(item: object, rank: int = 0) -> dict | None:
     """
     if not isinstance(item, dict):
         return None
+    import memory_cards
+    card=memory_cards.card_of(item)
+    if 'card' in item and card is None:
+        return None
     try:
         distance = float(item.get("distance"))
     except (TypeError, ValueError):
@@ -506,6 +517,8 @@ def _automatic_context_candidate(item: object, rank: int = 0) -> dict | None:
         if str(metadata.get("curation_stage") or "").lower() == "agent_outcome_v1":
             return None
 
+    if card is not None:
+        return {'card':card,'recorded':item.get('created_at'),'branch':item.get('branch'),'distance':round(distance,4)}
     return {
         "message": item.get("message"),
         "branch": item.get("branch"),
@@ -554,8 +567,8 @@ def _user_prompt(data: dict) -> dict | None:
     session_state.save(sid, state)
     if not slim:
         return None
-    text = "BOSWELL RELEVANT MEMORIES for the current human prompt:\n" + json.dumps(
-        slim, ensure_ascii=False, separators=(",", ":"))
+    import memory_cards
+    text = memory_cards.context("BOSWELL RELEVANT MEMORIES for the current human prompt:",slim)
     return _context("UserPromptSubmit", text)
 
 

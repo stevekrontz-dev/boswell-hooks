@@ -42,6 +42,7 @@ RUNTIME_FILES=(
   git_guard.py
   hook_health.py
   opening_briefing.py
+  memory_cards.py
   prompt_retrieval.py
   protected_paths.py
   read_before_code.py
