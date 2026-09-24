@@ -14,6 +14,47 @@ guards at the tool boundary, and queues transcripts durably.
 
 The runtime uses only Python's standard library.
 
+## Boswell-managed setup and updates
+
+The protected release catalog is `https://v3.askboswell.com/init/catalog.json`.
+An agent can call `boswell_init` to check local setup. The response is discovery
+data, not permission to install. Existing user authorization and the host's
+normal permission controls apply. Web-only clients do not need local hooks.
+
+For the first installation, approve the publisher/repository identified by this
+plugin's manifest, obtain its installer and `publisher.pub` from that repository,
+and inspect the key fingerprint with `ssh-keygen -lf publisher.pub`. This is a
+trust-on-first-use bootstrap: its authenticity depends on the approved repository
+and account. Future catalogs are verified against the locally pinned key.
+
+The installer requires Python 3.10+ and OpenSSH `ssh-keygen` with SSH signature
+support. No Python packages or daemon are needed. From the approved checkout:
+
+```text
+python scripts/init_installer.py install --host claude-code --publisher-key publisher.pub
+python scripts/init_installer.py status --host claude-code
+python scripts/init_installer.py update --host claude-code
+python scripts/init_installer.py rollback --host claude-code
+```
+
+Use `--host codex` for Codex. Use the same host profile for installation and later
+updates. The installer verifies the signed catalog, artifact digest, host/Python
+compatibility and archive paths, then registers a local verified marketplace
+with the host plugin manager. It never runs instructions from package documents.
+An expanded declared scope needs user approval before `--accept-scope`; declared
+scope is a publisher statement, not an operating-system sandbox.
+
+Credentials and compaction checkpoints remain outside versioned install trees.
+The previous signed release is retained for explicit rollback. An interrupted
+manager operation remains `recovery_needed`; rerun the same installation or
+roll back. Verification failures must be resolved without disabling checks.
+
+After installation, start a fresh host session (and use the host's normal hook
+trust prompt where applicable). Status remains `installed_awaiting_activation`
+until successful startup and retrieval run in the same fresh session. Lifecycle
+records measure health, not tamper-proof attestation. Compaction readiness also
+requires a successful checkpoint and restoration, tested during the pilot.
+
 ## Tenant authentication
 
 For a single tenant, put its API key on one line in:

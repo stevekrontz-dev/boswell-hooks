@@ -41,6 +41,8 @@ RUNTIME_FILES=(
   empty_result.py
   git_guard.py
   hook_health.py
+  init_installer.py
+  installation_health.py
   opening_briefing.py
   memory_cards.py
   prompt_retrieval.py

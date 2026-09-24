@@ -248,6 +248,8 @@ def evaluate(data):
                 "assumption." % (exc or type(exc).__name__))
 
         rows = []
+        import installation_health
+        installation_health.note('retrieval', data)
         query_tokens = set()
         try:
             import read_before_code

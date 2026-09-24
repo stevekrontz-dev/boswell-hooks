@@ -341,6 +341,7 @@ def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> st
 
 
 def _session_start(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dict:
+    fresh_startup = False
     sid = data.get("session_id")
     state = session_state.load(sid)
     cached = session_state.load_startup_cache(sid)
@@ -363,6 +364,7 @@ def _session_start(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dic
         except boswell_client.BoswellUnavailable as exc:
             return _stop(f"Boswell startup failed; substantive work is halted: {exc}")
         session_state.save_startup_cache(sid, cached)
+        fresh_startup = True
         state["startup_loaded"] = True
         state["startup_loaded_at"] = time.time()
         state["startup_calls"] = int(state.get("startup_calls", 0)) + 1
@@ -380,6 +382,9 @@ def _session_start(data: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> dic
         state["startup_loaded"] = False
         session_state.save(sid, state)
         return _stop(f"Boswell startup orientation exceeded its safety budget: {exc}")
+    if fresh_startup:
+        import installation_health
+        installation_health.note('startup', data)
     return _context("SessionStart", orientation)
 
 
@@ -549,6 +554,8 @@ def _user_prompt(data: dict) -> dict | None:
     except boswell_client.BoswellUnavailable as exc:
         return _stop(f"Boswell retrieval failed; substantive work is halted: {exc}")
     results = response.get("results") or []
+    import installation_health
+    installation_health.note('retrieval', data)
     slim = []
     read_tokens = set(state.get("boswell_read_tokens") or [])
     for rank, item in enumerate(results):
@@ -751,6 +758,8 @@ def _pre_compact(data: dict) -> dict:
     import compaction_progress
     try:
         compaction_progress.prepare(data)
+        import installation_health
+        installation_health.note('checkpoint', data)
     except Exception as exc:
         return _stop(f"Boswell progress checkpoint failed before compaction: {exc}")
     sid = data.get("session_id")
@@ -769,6 +778,9 @@ def _restore_progress(data, event):
     import compaction_progress
     try:
         text=compaction_progress.restore(data)
+        if text:
+            import installation_health
+            installation_health.note('restore', data)
         return _context(event,text) if text else None
     except Exception as exc:
         return _stop(f"Boswell progress restoration failed: {exc}")
@@ -790,6 +802,8 @@ def _recover_progress(data, event, result):
         reason=f'Boswell progress recovery failed: {exc}'
         return _deny(reason) if event=='PreToolUse' else _stop(reason)
     if text is None:return result
+    import installation_health
+    installation_health.note('restore', data)
     recovered=dict(result or {})
     recovered['hookSpecificOutput']={**output,'hookEventName':event,
         'additionalContext':text+('\n\n'+existing if existing else '')}
