@@ -35,6 +35,13 @@ class InstallError(Exception):
     pass
 
 
+class InspectionUnavailable(InstallError):
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__('Cannot inspect host plugin installation (' + reason_code +
+                         '); rerun from a normal host terminal with the same profile before repair')
+
+
 def read(path, limit):
     with Path(path).open('rb') as stream:
         data = stream.read(limit + 1)
@@ -282,24 +289,40 @@ def manager_present(host, current):
         return False
     executable = shutil.which('codex' if host == 'codex' else 'claude')
     if not executable:
-        return False
+        raise InspectionUnavailable('manager_executable_unavailable')
     try:
         result = subprocess.run([executable, 'plugin', 'list', '--json'],
                                 capture_output=True, text=True, timeout=30)
         if result.returncode:
-            return False
+            raise InspectionUnavailable('manager_command_failed')
         value = json.loads(result.stdout)
-        rows = value.get('installed', []) if host == 'codex' else value
+        rows = value['installed'] if host == 'codex' else value
+        if (not isinstance(rows, list) or any(not isinstance(r, dict)
+                or not isinstance(r.get('pluginId', r.get('id')), str) for r in rows)):
+            raise InspectionUnavailable('manager_output_invalid')
         row = next((r for r in rows if r.get('pluginId', r.get('id')) == 'boswell-hooks@'+MARKET), None)
-        if not row or row.get('enabled') is not True or row.get('version') != current['version']:
+        if row is None:
+            return False
+        if type(row.get('enabled')) is not bool or not isinstance(row.get('version'), str):
+            raise InspectionUnavailable('manager_output_invalid')
+        if not row['enabled'] or row['version'] != current['version']:
             return False
         path = (profile_root(host)/'plugins/cache'/MARKET/'boswell-hooks'/current['version']
                 if host == 'codex' else Path(row['installPath']))
-        marker = load_json(path/'.boswell-install.json')
-        return bool(marker and all(marker.get(k) == current.get(k) for k in
+        try:
+            marker = json.loads(read(path/'.boswell-install.json', MAX_CATALOG))
+        except FileNotFoundError:
+            return False
+        except (ValueError, InstallError):
+            return False
+        return bool(isinstance(marker, dict) and all(marker.get(k) == current.get(k) for k in
                                   ('host', 'version', 'sha256', 'installation_id')))
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        return False
+    except subprocess.TimeoutExpired as exc:
+        raise InspectionUnavailable('manager_timeout') from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InspectionUnavailable('manager_access_failed') from exc
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise InspectionUnavailable('manager_output_invalid') from exc
 
 
 def status(root, host, *, verify_manager=True):
@@ -314,9 +337,15 @@ def status(root, host, *, verify_manager=True):
     result = {'host': host, 'status': 'installed_awaiting_activation',
               'installed_version': current['version'], 'installed_digest': current['sha256'],
               'installation_id': current['installation_id'], 'changed': False}
-    if verify_manager and not manager_present(host, current):
-        return {**result, 'status': 'repair_needed', 'installation_state': 'repair_needed',
-                'reason': 'Host profile/plugin registration or installation marker differs'}
+    if verify_manager:
+        try:
+            present = manager_present(host, current)
+        except InspectionUnavailable as exc:
+            return {**result, 'status': 'inspection_unavailable', 'installation_state': 'inspection_unavailable',
+                    'reason': str(exc), 'reason_code': exc.reason_code}
+        if not present:
+            return {**result, 'status': 'repair_needed', 'installation_state': 'repair_needed',
+                    'reason': 'Host profile/plugin registration or installation marker differs'}
     try:
         from installation_health import measured_status
         result.update(measured_status(Path(root), current))
@@ -342,6 +371,9 @@ def install(source, key, root, host, *, manager=host_manager, accept_scope=False
             raise InstallError('Install root belongs to another host')
         if current and current.get('profile_root') != str(profile_root(host)):
             raise InstallError('Install root belongs to another host profile')
+        # Unknown observation must never trigger uninstall/reinstall. Check before
+        # staging or journaling so a failed inspection leaves installation intact.
+        present = manager_present(host, current) if current and manager is host_manager else True
         releases = root/'releases'
         releases.mkdir(exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix='verified-', dir=releases))
@@ -356,7 +388,7 @@ def install(source, key, root, host, *, manager=host_manager, accept_scope=False
             if expands and not accept_scope and not _rollback:
                 raise InstallError('Declared scope expanded; obtain user approval before --accept-scope')
             if (release['sha256'] == current['sha256'] and not pending
-                    and (manager is not host_manager or manager_present(host, current))):
+                    and present):
                 # Stage is a fresh child created above; never delete a supplied path.
                 if stage.resolve().parent != releases.resolve():
                     raise InstallError('Invalid temporary release path')
@@ -383,7 +415,7 @@ def install(source, key, root, host, *, manager=host_manager, accept_scope=False
         atomic_json(root/'pending.json', {'target': record, 'previous': current})
         if not pinned.exists():
             pinned.write_bytes(candidate_key)
-        repairing = bool(current and manager is host_manager and not manager_present(host, current))
+        repairing = bool(current and manager is host_manager and not present)
         manager(host, market, 'repair' if repairing else bool(current or pending))
         if manager is host_manager and not manager_present(host, record):
             raise InstallError('Host manager returned success but installed package did not verify; recovery is still pending')

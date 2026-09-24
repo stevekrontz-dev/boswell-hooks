@@ -9,6 +9,14 @@ import urllib.request
 
 from codex_config import AGENT_ID, API_BASE, REQUEST_TIMEOUT, TIMEZONE, auth_headers
 
+_BOUND_HEADERS = None
+_BOUND_IDENTITY = None
+
+
+def bind_auth(headers, identity):
+    global _BOUND_HEADERS, _BOUND_IDENTITY
+    _BOUND_HEADERS, _BOUND_IDENTITY = dict(headers), identity
+
 
 class BoswellUnavailable(RuntimeError):
     """Boswell could not be reached or did not answer usefully.
@@ -31,9 +39,16 @@ class BoswellAuthRejected(BoswellUnavailable):
 
 
 def _request(method: str, path: str, *, params: dict | None = None,
-             payload: dict | None = None, timeout: float | None = None) -> dict:
+             payload: dict | None = None, timeout: float | None = None,
+             expected_binding: str | None = None) -> dict:
     headers = {"Accept": "application/json", "User-Agent": "boswell-hooks/2.2"}
-    headers.update(auth_headers())
+    selected = auth_headers()
+    from tenant_binding import current_binding
+    identity = current_binding(selected)
+    if ((_BOUND_IDENTITY is not None and identity != _BOUND_IDENTITY)
+            or (expected_binding is not None and identity != expected_binding)):
+        raise BoswellAuthRejected('Tenant credential changed; request refused')
+    headers.update(_BOUND_HEADERS if _BOUND_HEADERS is not None else selected)
     if "X-API-Key" not in headers:
         raise BoswellAuthRejected("no machine-local Boswell credential is configured")
     url = f"{API_BASE}{path}"
@@ -89,12 +104,12 @@ def search(query: str, limit: int = 5, timeout: float | None = None) -> dict:
 
 
 def commit(*, branch: str, content: dict, content_type: str,
-           message: str, tags: list[str]) -> dict:
+           message: str, tags: list[str], expected_binding: str | None = None) -> dict:
     return _request("POST", "/v2/commit", payload={
         "branch": branch,
         "content": content,
         "type": content_type,
         "message": message,
         "tags": tags,
-    })
+    }, expected_binding=expected_binding)
 

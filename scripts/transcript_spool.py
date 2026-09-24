@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import socket
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,7 +15,9 @@ from codex_config import ARCHIVE_ROOT, PLUGIN_DATA
 from session_state import safe_session_id
 
 
-QUEUE_PATH = PLUGIN_DATA / "pending_transcripts.json"
+# v1 was shared with Claude's incompatible list queue and carried no binding.
+# Leave it untouched for explicit evidence review; never assign it today's key.
+QUEUE_PATH = PLUGIN_DATA / "bound_transcripts.json"
 MACHINE = socket.gethostname().lower()
 
 
@@ -48,7 +51,9 @@ def capture(data: dict, event: str) -> dict | None:
     source = Path(transcript)
     if not source.is_file():
         return None
-    session_id = str(data.get("session_id") or source.stem)
+    import tenant_binding
+    binding = tenant_binding.bind_session(data)
+    session_id = data['session_id']
     safe_id = safe_session_id(session_id)
     client = "claude" if data.get("client") == "claude" else "codex"
     label = "Claude Code" if client == "claude" else "Codex"
@@ -57,9 +62,17 @@ def capture(data: dict, event: str) -> dict | None:
     archive_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix or ".jsonl"
     archive = archive_dir / f"{client}-{safe_id}{suffix}"
-    shutil.copy2(source, archive)
+    descriptor, temporary = tempfile.mkstemp(dir=archive_dir, prefix='.capture-')
+    os.close(descriptor)
+    snapshot = Path(temporary)
+    try:
+        shutil.copy2(source, snapshot)
+        tenant_binding.validate_transcript(snapshot, session_id)
+        os.replace(snapshot, archive)
+    finally:
+        snapshot.unlink(missing_ok=True)
     card = {
-        "authored_by": f"{label} (home)",
+        "authored_by": label,
         "client": client,
         "session_id": session_id,
         "machine": MACHINE,
@@ -75,7 +88,7 @@ def capture(data: dict, event: str) -> dict | None:
     queue = _read_queue()
     previous = queue.get(session_id, {}).get("index_card", {})
     if previous.get("sha256") != card["sha256"]:
-        queue[session_id] = {"index_card": card}
+        queue[session_id] = {"index_card": card, "binding": binding}
         _write_queue(queue)
     return card
 
@@ -85,6 +98,11 @@ def flush_pending(*, exclude_session_id: str | None = None) -> tuple[int, int]:
     committed = 0
     survivors: dict[str, dict] = {}
     for session_id, entry in queue.items():
+        from tenant_binding import current_binding
+        binding = entry.get('binding') if isinstance(entry, dict) else None
+        if not binding or binding != current_binding():
+            survivors[session_id] = entry
+            continue
         if session_id == exclude_session_id:
             survivors[session_id] = entry
             continue
@@ -101,6 +119,7 @@ def flush_pending(*, exclude_session_id: str | None = None) -> tuple[int, int]:
                 message=(f"TRANSCRIPT: {label} {session_id[:8]} ({card.get('machine')}, "
                          f"{card.get('byte_count', '?')} bytes)"),
                 tags=["transcript", f"{client}-session", str(card.get("machine", MACHINE))],
+                expected_binding=binding,
             )
             committed += 1
         except boswell_client.BoswellUnavailable:

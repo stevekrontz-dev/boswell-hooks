@@ -30,13 +30,17 @@ REQUEST_TIMEOUT = float(os.environ.get("BOSWELL_HOOK_TIMEOUT", "12"))
 HEARTBEAT_SECONDS = int(os.environ.get("BOSWELL_HOOK_HEARTBEAT", "1800"))
 
 
-def _first_secret(path: Path) -> str | None:
+def _first_secret(path: Path, *, strict=False) -> str | None:
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             value = line.strip()
             if value and not value.startswith("#"):
                 return value
+    except FileNotFoundError:
+        return None
     except OSError:
+        if strict:
+            raise
         return None
     return None
 
@@ -45,11 +49,11 @@ def _profile_name() -> str | None:
     """Resolve an explicit/default named tenant without trusting shell syntax."""
     name = os.environ.get("BOSWELL_TENANT", "").strip()
     if not name:
-        name = _first_secret(DEFAULT_TENANT_FILE) or ""
+        name = _first_secret(DEFAULT_TENANT_FILE, strict=True) or ""
     if not name:
         return None
     if not all(ch.isalnum() or ch in "-_" for ch in name):
-        return None
+        raise ValueError('Invalid selected tenant profile')
     return name
 
 
@@ -67,7 +71,10 @@ def auth_headers() -> dict[str, str]:
     Fleet-internal credentials are intentionally unsupported in this public
     package: identical code is authorized only by the selected tenant key.
     """
-    profile = _profile_name()
+    try:
+        profile = _profile_name()
+    except (OSError, ValueError):
+        return {}
     profile_key = _first_secret(TENANT_PROFILE_ROOT / f"{profile}.key") if profile else None
     if profile and not profile_key:
         return {}

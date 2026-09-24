@@ -194,3 +194,91 @@ def test_interrupted_first_install_reuses_pending_identity(installer, signed, tm
         observed.append(json.loads((market/'plugin/.boswell-install.json').read_text())['installation_id'])
     installer.install(source, key, root, 'claude-code', manager=retry)
     assert len(observed) == 2 and observed[0] == observed[1]
+
+@pytest.mark.parametrize('failure', ['executable', 'exit', 'timeout', 'permission', 'json', 'shape'])
+def test_unobservable_manager_is_not_missing_or_ready(installer, tmp_path, monkeypatch, failure):
+    root = tmp_path/'install'
+    current = {'host': 'codex', 'profile_root': str(installer.profile_root('codex')),
+               'version': '2.4.0', 'sha256': 'a'*64, 'installation_id': 'test-install'}
+    installer.atomic_json(root/'current.json', current)
+    monkeypatch.setattr(installer.shutil, 'which', lambda name: None if failure == 'executable' else 'codex')
+    def inspect(*args, **kwargs):
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired('codex', 30)
+        if failure == 'permission':
+            raise PermissionError('sensitive environment detail must not escape')
+        return subprocess.CompletedProcess([], 1 if failure == 'exit' else 0,
+                                           '{}' if failure == 'shape' else 'not json', 'sensitive stderr')
+    monkeypatch.setattr(installer.subprocess, 'run', inspect)
+    result = installer.status(root, 'codex')
+    assert result['status'] == result['installation_state'] == 'inspection_unavailable'
+    assert 'startup_ok' not in result
+    assert 'sensitive' not in json.dumps(result)
+    assert result['reason_code']
+
+
+def test_verified_absent_plugin_still_needs_repair(installer, tmp_path, monkeypatch):
+    root = tmp_path/'install'
+    installer.atomic_json(root/'current.json', {'host': 'codex', 'profile_root': str(installer.profile_root('codex')),
+                           'version': '2.4.0', 'sha256': 'a'*64, 'installation_id': 'test-install'})
+    monkeypatch.setattr(installer.shutil, 'which', lambda name: 'codex')
+    monkeypatch.setattr(installer.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess([], 0, '{"installed": []}', ''))
+    assert installer.status(root, 'codex')['status'] == 'repair_needed'
+
+
+def test_unobservable_manager_cannot_trigger_repair(installer, signed, tmp_path, monkeypatch):
+    source, key, publish = signed
+    root = tmp_path/'install'
+    publish()
+    installer.install(source, key, root, 'claude-code', manager=lambda *args: None)
+    before = (root/'current.json').read_bytes()
+    stages = sorted((root/'releases').iterdir())
+    real_run = installer.subprocess.run
+    def run(command, **kwargs):
+        if command[1:3] == ['plugin', 'list']:
+            return subprocess.CompletedProcess(command, 1, '', 'unavailable')
+        return real_run(command, **kwargs)
+    monkeypatch.setattr(installer.subprocess, 'run', run)
+    calls = []
+    manager = lambda *args: calls.append(args)
+    monkeypatch.setattr(installer, 'host_manager', manager)
+    with pytest.raises(installer.InstallError, match='inspect'):
+        installer.install(source, key, root, 'claude-code', manager=manager)
+    assert calls == []
+    assert (root/'current.json').read_bytes() == before
+    assert not (root/'pending.json').exists()
+    assert sorted((root/'releases').iterdir()) == stages
+
+@pytest.mark.parametrize('marker_mode', ['missing', 'mismatch', 'invalid', 'unreadable'])
+def test_marker_failure_distinguishes_damage_from_unobservable(installer, tmp_path, monkeypatch, marker_mode):
+    profile = tmp_path/'profile'
+    monkeypatch.setenv('CODEX_HOME', str(profile))
+    root = tmp_path/'install'
+    current = {'host': 'codex', 'profile_root': str(profile.resolve()), 'version': '2.4.0',
+               'sha256': 'a'*64, 'installation_id': 'test-install'}
+    installer.atomic_json(root/'current.json', current)
+    path = profile/'plugins/cache/boswell-init/boswell-hooks/2.4.0/.boswell-install.json'
+    if marker_mode != 'missing':
+        installer.atomic_json(path, [1] if marker_mode == 'invalid' else {**current, 'sha256': 'b'*64})
+    monkeypatch.setattr(installer.shutil, 'which', lambda name: 'codex')
+    row = {'pluginId': 'boswell-hooks@boswell-init', 'enabled': True, 'version': '2.4.0'}
+    monkeypatch.setattr(installer.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess([], 0, json.dumps({'installed': [row]}), ''))
+    if marker_mode == 'unreadable':
+        real_read = installer.read
+        def read(path, limit):
+            if path.name == '.boswell-install.json':
+                raise PermissionError('private diagnostic')
+            return real_read(path, limit)
+        monkeypatch.setattr(installer, 'read', read)
+    expected = 'inspection_unavailable' if marker_mode == 'unreadable' else 'repair_needed'
+    assert installer.status(root, 'codex')['status'] == expected
+
+
+@pytest.mark.parametrize('rows', [[{}], [{'pluginId': 'boswell-hooks@boswell-init', 'version': '2.4.0'}]])
+def test_incomplete_inventory_cannot_establish_absence(installer, tmp_path, monkeypatch, rows):
+    root = tmp_path/'install'
+    installer.atomic_json(root/'current.json', {'host': 'codex', 'profile_root': str(installer.profile_root('codex')),
+                           'version': '2.4.0', 'sha256': 'a'*64, 'installation_id': 'test-install'})
+    monkeypatch.setattr(installer.shutil, 'which', lambda name: 'codex')
+    monkeypatch.setattr(installer.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess([], 0, json.dumps({'installed': rows}), ''))
+    assert installer.status(root, 'codex')['status'] == 'inspection_unavailable'

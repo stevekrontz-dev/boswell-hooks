@@ -32,6 +32,12 @@ def history():
 def lab(tmp_path,monkeypatch):
     monkeypatch.setattr(session_state,'STATE_ROOT',tmp_path/'state')
     monkeypatch.setattr(dispatcher.transcript_spool,'capture',lambda *_:None)
+    import codex_config
+    import tenant_binding
+    monkeypatch.setattr(codex_config,'auth_headers',lambda: {'X-API-Key':'compaction-test-only'})
+    monkeypatch.setattr(dispatcher.boswell_client,'_BOUND_HEADERS',None)
+    monkeypatch.setattr(dispatcher.boswell_client,'_BOUND_IDENTITY',None)
+    tenant_binding.bind_session({'session_id':'session-a'},create=True)
     session_state.save_startup_cache('session-a',{'sacred_manifest':{'identity':'STARTUP MUST NOT REPLAY'}})
     path=tmp_path/'transcript.jsonl'
     path.write_text(''.join(json.dumps(row)+'\n' for row in history()),encoding='utf-8')

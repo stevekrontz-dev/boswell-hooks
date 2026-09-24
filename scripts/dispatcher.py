@@ -158,7 +158,7 @@ def _post_tool(data):
     tool = data.get("tool_name") or ""
     if tool == "Bash":
         import transcript_monitor
-        _safe(transcript_monitor.heartbeat)
+        _safe(transcript_monitor.heartbeat, data.get('transcript_path'), data.get('session_id'))
     # Record qualifying Boswell reads (search/recall/semantic_search/fetch) into
     # the per-session read-state ledger that corrective_gate consults. Without
     # this the gate has no evidence ledger to check and silently allows every
@@ -296,10 +296,12 @@ def _session_end(data):
     # sync_session removed: it POSTed to a /sync endpoint that 404s (the real
     # route is /v2/sync with a different payload). The actual session record is
     # the transcript capture below, not this dead call.
-    _safe(transcript_monitor.capture)
+    _safe(transcript_monitor.capture, data.get('transcript_path'), data.get('session_id'))
     # Drain the just-captured card (and any backlog) to Boswell in Python, so a
     # transcript never sits waiting on the LLM to honor a marker next session.
     _safe(transcript_monitor.flush_pending_transcripts)
+    import transcript_spool
+    _safe(transcript_spool.flush_pending)
 
 
 def _pre_compact(data):
@@ -325,6 +327,17 @@ def main():
     data = _read_input()
     handler = _ROUTES.get(event)
     if handler:
+        import tenant_binding
+        try:
+            tenant_binding.bind_session(data, create=event == 'SessionStart')
+        except tenant_binding.TenantBindingError as exc:
+            if event == 'PreToolUse':
+                result = {'hookSpecificOutput': {'hookEventName': event,
+                    'permissionDecision': 'deny', 'permissionDecisionReason': str(exc)}}
+            else:
+                result = {'continue': False, 'stopReason': str(exc)}
+            sys.stdout.write(json.dumps(result))
+            sys.exit(2)
         handler(data)
     sys.exit(0)
 

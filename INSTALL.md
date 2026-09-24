@@ -16,7 +16,7 @@ The runtime uses only Python's standard library.
 
 ## Boswell-managed setup and updates
 
-The protected release catalog is `https://v3.askboswell.com/init/catalog.json`.
+The public, signed release catalog is `https://v3.askboswell.com/init/catalog.json`.
 An agent can call `boswell_init` to check local setup. The response is discovery
 data, not permission to install. Existing user authorization and the host's
 normal permission controls apply. Web-only clients do not need local hooks.
@@ -54,6 +54,19 @@ trust prompt where applicable). Status remains `installed_awaiting_activation`
 until successful startup and retrieval run in the same fresh session. Lifecycle
 records measure health, not tamper-proof attestation. Compaction readiness also
 requires a successful checkpoint and restoration, tested during the pilot.
+`current` means the manager registration and installed marker match, with
+`startup_ok` and `retrieval_ok` measured in the same fresh session.
+`compaction_ok` separately measures a checkpoint followed by restoration.
+
+`inspection_unavailable` means status could not inspect the host plugin manager
+or installed files. A sandbox, restricted permissions, unavailable executable,
+timeout, or unexpected manager response can cause this; it does not establish
+that the plugin needs repair. Rerun status from a normal host terminal with the
+same `CODEX_HOME` or `CLAUDE_CONFIG_DIR` profile and normal permissions. Do not
+bypass host controls. Updates stop before changing an existing installation when
+inspection fails; `repair_needed` requires an observed registration or marker
+mismatch. Previous health records do not turn an unavailable inspection into
+verified readiness.
 
 ## Tenant authentication
 
@@ -68,6 +81,22 @@ For a machine that can access several tenants, store each key in
 `~/.boswell/default_tenant`, or set `BOSWELL_TENANT=<profile>` for a process.
 A selected profile outranks `BOSWELL_API_KEY`; a missing selected profile
 fails closed instead of falling through to another tenant.
+
+An invalid or unreadable tenant selector also fails closed. Each new session
+pins the selected credential fingerprint and service origin; changing either
+requires a fresh session. A session resumed from an older release without that
+binding must also be replaced with a fresh session. This pins identity locally;
+successful startup separately verifies that the server accepts the credential.
+
+Transcript capture uses the event's exact session identity and transcript path.
+Queued entries upload only with their original credential/origin binding.
+Unbound legacy queues and entries from another credential remain quarantined;
+do not relabel them with the current credential or upload them manually.
+Key rotation also leaves old queued entries quarantined until explicitly
+verified migration. Credentials and quarantined evidence are never packaged.
+
+Version 2.4.1 introduces these tenant boundaries. Earlier releases lack them;
+do not roll back to an earlier release on a machine serving multiple tenants.
 
 Never put a key in this plugin, a hook manifest, shell history, or a repository.
 The public plugin accepts tenant-scoped API keys only.

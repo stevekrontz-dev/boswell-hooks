@@ -175,35 +175,31 @@ def log(message):
         pass
 
 
-def capture():
-    session_file = find_current_session()
-    if not session_file:
-        log("No session file found")
+def capture(transcript_path=None, session_id=None):
+    # Legacy standalone entry point: explicit event identity is mandatory.
+    # Raw capture avoids depending on Claude's changing message schemas.
+    if not transcript_path or not session_id:
         return
-    parsed = parse_session(session_file)
-    session_id = parsed["session_id"]
-    archive_path = archive_session(session_file, session_id)
-    log(f"Archived {session_id} -> {archive_path}")
-    queue_for_boswell(build_index_card(parsed, archive_path), session_id)
-    log(f"Queued {session_id} for Boswell commit")
-    state = get_state()
-    state["last_checkpoint"] = time.time()
-    state["last_session_id"] = session_id
-    state["last_file_size"] = session_file.stat().st_size
-    save_state(state)
+    import transcript_spool
+    card = transcript_spool.capture({'transcript_path': transcript_path,
+        'session_id': session_id, 'client': 'claude'}, 'session_end')
+    if card:
+        save_state({'last_checkpoint': time.time(), 'last_session_id': session_id,
+                    'last_file_size': card['byte_count']})
+    return card
 
 
-def heartbeat():
+def heartbeat(transcript_path=None, session_id=None):
     state = get_state()
     if time.time() - state.get("last_checkpoint", 0) < HEARTBEAT_INTERVAL:
         return
-    session_file = find_current_session()
+    session_file = Path(transcript_path) if transcript_path else None
     if not session_file:
         return
     if session_file.stat().st_size == state.get("last_file_size", 0):
         return
     log("Heartbeat triggered")
-    capture()
+    capture(str(session_file), session_id)
 
 
 def _queue_path():
@@ -252,6 +248,11 @@ def flush_pending_transcripts():
 
     survivors, committed = [], 0
     for entry in pending:
+        from tenant_binding import current_binding
+        binding = entry.get('binding') if isinstance(entry, dict) else None
+        if not binding or binding != current_binding():
+            survivors.append(entry)
+            continue
         card = entry.get("index_card")
         sid = entry.get("session_id", "?")
         if not card:
@@ -266,6 +267,7 @@ def flush_pending_transcripts():
                 message=f"TRANSCRIPT: {sid[:8]} ({machine}, "
                         f"{card.get('message_count', '?')} msgs) — {fp}",
                 tags=["transcript", "cc-session", machine],
+                expected_binding=binding,
             )
             ok = True
         except Exception as exc:
@@ -290,8 +292,8 @@ def check_pending():
     queue_file = _queue_path()
     return (
         f"BOSWELL TRANSCRIPT QUEUE: {remaining} item(s) remain at {queue_file}. "
-        "Automatic upload could not authenticate or reach Boswell; preserve the "
-        "queue and repair the tenant credential or connection before discarding it."
+        "Unbound or differently bound historical entries are quarantined. "
+        "Do not upload them using the currently selected credential or discard them."
     )
 
 

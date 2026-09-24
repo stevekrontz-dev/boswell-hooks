@@ -50,6 +50,7 @@ RUNTIME_FILES=(
   read_before_code.py
   readstate.py
   session_state.py
+  tenant_binding.py
   supersession.py
   transcript_monitor.py
   transcript_spool.py

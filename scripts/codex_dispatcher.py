@@ -900,6 +900,8 @@ def main() -> int:
     traced=event in {'SessionStart','PreCompact','PostCompact'}
     if traced:compaction_progress.audit(data,event,'entered',source=data.get('source'))
     try:
+        import tenant_binding
+        tenant_binding.bind_session(data, create=event == 'SessionStart')
         result=handler(data)
         if event in {'UserPromptSubmit','PreToolUse'}:
             result=_recover_progress(data,event,result)
@@ -907,6 +909,15 @@ def main() -> int:
         if traced:compaction_progress.audit(data,event,'emitted' if result else 'no_output')
     except Exception as exc:
         if traced:compaction_progress.audit(data,event,'error',error=type(exc).__name__)
+        if isinstance(exc, tenant_binding.TenantBindingError):
+            # Identity failures are never eligible for the diagnostic fail-open
+            # override: old context cannot be rebound to another credential.
+            if event == 'PreToolUse':
+                _emit({'hookSpecificOutput': {'hookEventName': event,
+                    'permissionDecision': 'deny', 'permissionDecisionReason': str(exc)}})
+            else:
+                _emit({'continue': False, 'stopReason': str(exc)})
+            return 2
         if event in {"SessionStart", "UserPromptSubmit", "PostCompact"}:
             _emit(_stop(f"Boswell {event} hook failed: {type(exc).__name__}"))
         elif event == "PreToolUse":
