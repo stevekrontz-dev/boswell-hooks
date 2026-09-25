@@ -538,6 +538,11 @@ def restore(data, *, consume=True, after_compaction=False, max_context=MAX_CONTE
                 projected={'checkpoint_path':str(path),'full_record_inlined':False,
                     'overflow_rule':OVERFLOW_RULE}
         text=render()
+        if len(text)>max_context:
+            # This callback has no room even for the checkpoint pointer. Keep
+            # recovery pending for the next callback; do not overrun existing
+            # context or mark evidence delivered when it could be discarded.
+            return None
         # The host has no delivery acknowledgment. Serialize and mark before
         # emitting: concurrent PostCompact/SessionStart cannot replay progress.
         if consume:

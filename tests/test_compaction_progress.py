@@ -481,6 +481,25 @@ def test_overflow_emits_bounded_pointer_instead_of_halting(lab):
     assert dispatcher._recover_progress(lab,'PreToolUse',None) is None
 
 
+@pytest.mark.parametrize('occupied', [8200, 8400, 8490])
+def test_full_callback_defers_progress_without_consuming_or_blocking(lab, occupied):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps({'type': 'compacted', 'payload': {}})+'\n')
+    existing = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit',
+                                      'additionalContext': 'x'*occupied}}
+    result = dispatcher._recover_progress(lab, 'UserPromptSubmit', existing)
+    assert result == existing
+    checkpoint = progress._paths(lab['session_id'])[0]
+    assert progress._read(checkpoint)['restored'] is False
+    result = dispatcher._recover_progress(lab, 'PreToolUse', None)
+    context = result['hookSpecificOutput']['additionalContext']
+    assert len(context) <= progress.MAX_CONTEXT
+    assert progress._read(checkpoint)['restored'] is True
+    assert dispatcher._recover_progress(lab, 'PreToolUse', None) is None
+
+
 def test_postcompact_does_not_consume_context_before_supported_session_callback(lab):
     import compaction_progress as progress
     dispatcher._pre_compact(lab)
