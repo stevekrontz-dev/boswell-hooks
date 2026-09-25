@@ -399,6 +399,32 @@ def _compacted_after(record, data):
     return False
 
 
+OVERFLOW_RULE = ('The full progress record exceeded the context budget and is NOT inlined. '
+                 'Before any other action, read checkpoint_path in full; this digest only orients.')
+
+
+def _overflow_digest(record, path, limit=360):
+    """Bounded orientation when the full projection cannot fit context."""
+    def short(item):
+        if not isinstance(item,dict):return None
+        value=item.get('text') if 'text' in item else item.get('value')
+        if not isinstance(value,str):value=_json(value) if value is not None else None
+        if not limit or value is None:return None
+        return value if len(value)<=limit else value[:limit]+'?'
+    digest={'checkpoint_path':str(path),'full_record_inlined':False,
+        'overflow_rule':OVERFLOW_RULE,'continuation_rules':RULES}
+    for key in ('root_objective','objective','current_subtask','next_action',
+                'reported_ownership','latest_request'):
+        value=short(record.get(key))
+        if value:digest[key]=value
+    agents=record.get('agents')
+    if isinstance(agents,dict):
+        digest['agent_status']={name:agent.get('status') for name,agent in agents.items()
+                                if isinstance(agent,dict)}
+    if record.get('running_jobs'):digest['running_jobs']=record['running_jobs']
+    return digest
+
+
 def restore(data, *, consume=True, after_compaction=False, max_context=MAX_CONTEXT):
     with _locked(data.get('session_id')) as path:
         saved=_read(path)
@@ -501,7 +527,16 @@ def restore(data, *, consume=True, after_compaction=False, max_context=MAX_CONTE
                 projected[key].pop(0)
                 projected['additional_evidence_in_checkpoint']=True
         if len(render())>max_context:
-            raise ValueError('Progress ownership/objective exceeds context budget; read checkpoint '+str(path))
+            # Failing closed here denied every prompt and tool call, so the
+            # agent could never read the checkpoint it was told to read. Emit a
+            # bounded digest instead; the full record stays on disk, unchanged.
+            projected=_overflow_digest(record,path)
+            for limit in (240,120,60,0):
+                if len(render())<=max_context:break
+                projected=_overflow_digest(record,path,limit)
+            if len(render())>max_context:
+                projected={'checkpoint_path':str(path),'full_record_inlined':False,
+                    'overflow_rule':OVERFLOW_RULE}
         text=render()
         # The host has no delivery acknowledgment. Serialize and mark before
         # emitting: concurrent PostCompact/SessionStart cannot replay progress.
