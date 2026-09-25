@@ -459,6 +459,47 @@ def test_budget_preserves_rich_progress_and_six_answered_requests(lab):
     assert dispatcher._post_compact(lab) is None
 
 
+def test_overflow_emits_bounded_pointer_instead_of_halting(lab):
+    rows=history()
+    plan=rows[-1]['payload']['item']['arguments']['content']
+    plan['ownership']={f'/root/worker_{i}':'Owns a long-running slice. '*20 for i in range(12)}
+    Path(lab['transcript_path']).write_text(''.join(json.dumps(x)+'\n' for x in rows),encoding='utf-8')
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps({'type':'compacted','payload':{}})+'\n')
+    existing={'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':'x'*7000}}
+    result=dispatcher._recover_progress(lab,'UserPromptSubmit',existing)
+    assert result.get('continue') is not False
+    context=result['hookSpecificOutput']['additionalContext']
+    assert len(context)<=8500
+    assert context.endswith('x'*7000)
+    digest=json.loads(context.split('\n',1)[1].split('\n\n',1)[0])
+    assert digest['full_record_inlined'] is False
+    full=json.loads(Path(digest['checkpoint_path']).read_text(encoding='utf-8'))
+    assert full['restored'] is True
+    assert full['record']['reported_ownership']['value']==plan['ownership']
+    assert dispatcher._recover_progress(lab,'PreToolUse',None) is None
+
+
+@pytest.mark.parametrize('occupied', [8200, 8400, 8490])
+def test_full_callback_defers_progress_without_consuming_or_blocking(lab, occupied):
+    import compaction_progress as progress
+    dispatcher._pre_compact(lab)
+    with Path(lab['transcript_path']).open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps({'type': 'compacted', 'payload': {}})+'\n')
+    existing = {'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit',
+                                      'additionalContext': 'x'*occupied}}
+    result = dispatcher._recover_progress(lab, 'UserPromptSubmit', existing)
+    assert result == existing
+    checkpoint = progress._paths(lab['session_id'])[0]
+    assert progress._read(checkpoint)['restored'] is False
+    result = dispatcher._recover_progress(lab, 'PreToolUse', None)
+    context = result['hookSpecificOutput']['additionalContext']
+    assert len(context) <= progress.MAX_CONTEXT
+    assert progress._read(checkpoint)['restored'] is True
+    assert dispatcher._recover_progress(lab, 'PreToolUse', None) is None
+
+
 def test_postcompact_does_not_consume_context_before_supported_session_callback(lab):
     import compaction_progress as progress
     dispatcher._pre_compact(lab)
