@@ -599,6 +599,99 @@ class CodexHookTests(unittest.TestCase):
         })
         self.assertIsNone(dispatcher._pre_tool(data))
 
+    def test_numeric_heavy_session_keeps_a_later_real_read_for_correction(self):
+        session_state.save_startup_cache("saturated", self.startup_payload())
+        session_state.save("saturated", {
+            "startup_loaded": True,
+            "boswell_read_tokens": [f"{i:04d}" for i in range(1000)],
+        })
+        correction = {
+            "session_id": "saturated",
+            "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+            "tool_input": {"message": "CORRECTION: original meeting audio is retained"},
+        }
+        self.assertEqual(
+            dispatcher._pre_tool(correction)["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+        with mock.patch.object(dispatcher.transcript_spool, "capture", return_value=None):
+            dispatcher._post_tool({
+                "session_id": "saturated",
+                "tool_name": "mcp__Boswell-Atlas__boswell_recall",
+                "tool_input": {"commit": "old-plan"},
+                "tool_response": {"content": " ".join(f"{i:04d}" for i in range(900))
+                                  + " The original meeting audio was not retained."},
+            })
+        evidence = session_state.load("saturated")["boswell_read_tokens"]
+        self.assertIsNone(dispatcher._pre_tool(correction))
+        self.assertLessEqual(len(evidence), 1000)
+        self.assertIn("meeting", evidence)
+        self.assertIn("audio", evidence)
+        self.assertNotIn("0000", evidence)
+
+    def test_recent_rare_read_survives_a_full_lexical_ledger(self):
+        session_state.save_startup_cache("recent", self.startup_payload())
+        session_state.save("recent", {
+            "startup_loaded": True,
+            "boswell_read_tokens": ["alpha" + chr(97 + i // 676)
+                                    + chr(97 + i // 26 % 26) + chr(97 + i % 26)
+                                    for i in range(1000)],
+        })
+        dispatcher.record_read({
+            "session_id": "recent",
+            "tool_name": "mcp__Boswell-Atlas__boswell_search",
+            "tool_input": {"query": "zebraprovenance"},
+            "tool_response": {"results": [{"content": "zebraprovenance zetaoriginal"}]},
+        })
+        correction = {
+            "session_id": "recent",
+            "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+            "tool_input": {"message": "CORRECTION: zebraprovenance replaces zetaoriginal"},
+        }
+        evidence = session_state.load("recent")["boswell_read_tokens"]
+        self.assertLessEqual(len(evidence), 1000)
+        self.assertIn("zebraprovenance", evidence)
+        self.assertIn("zetaoriginal", evidence)
+        self.assertIsNone(dispatcher._pre_tool(correction))
+
+    def test_read_evidence_cannot_authorize_unseen_or_other_session_correction(self):
+        for sid in ("reader", "other"):
+            session_state.save_startup_cache(sid, self.startup_payload())
+            session_state.save(sid, {"startup_loaded": True})
+        dispatcher.record_read({
+            "session_id": "reader",
+            "tool_name": "mcp__Boswell-Atlas__boswell_recall",
+            "tool_input": {"commit": "known-fact"},
+            "tool_response": "The original meeting audio was not retained.",
+        })
+        for sid, message in (
+            ("reader", "CORRECTION: archived calendar captions were wrong"),
+            ("other", "CORRECTION: original meeting audio was wrong"),
+        ):
+            decision = dispatcher._pre_tool({
+                "session_id": sid,
+                "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+                "tool_input": {"message": message},
+            })
+            self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_empty_search_query_is_not_evidence_for_its_own_correction(self):
+        session_state.save_startup_cache("empty-search", self.startup_payload())
+        session_state.save("empty-search", {"startup_loaded": True})
+        dispatcher.record_read({
+            "session_id": "empty-search",
+            "tool_name": "mcp__Boswell-Atlas__boswell_search",
+            "tool_input": {"query": "zebraprovenance zetaoriginal"},
+            "tool_response": {"results": []},
+        })
+        decision = dispatcher._pre_tool({
+            "session_id": "empty-search",
+            "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+            "tool_input": {"message": "CORRECTION: zebraprovenance replaces zetaoriginal"},
+        })
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
     @mock.patch.object(dispatcher.transcript_spool, "capture", return_value=None)
     def test_stop_gate_blocks_once_then_allows(self, _capture):
         session_state.save("s4", {

@@ -37,6 +37,7 @@ VERIFY_RE = re.compile(
 )
 FAILURE_RE = re.compile(r"exit code:\s*[1-9]|\b(failed|failure|traceback)\b", re.IGNORECASE)
 READ_TOOL_RE = re.compile(r"boswell_(search|semantic_search|recall|fetch|head|log|brief|manifest)")
+READ_EVIDENCE_LIMIT = 1000
 MUTATION_TOOLS = {"apply_patch", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 MATERIAL_TOOLS = MUTATION_TOOLS | {"Bash", "shell_command"}
 APPLY_PATCH_DELETE_PREFIX = "*** Delete File: "
@@ -557,18 +558,16 @@ def _user_prompt(data: dict) -> dict | None:
     import installation_health
     installation_health.note('retrieval', data)
     slim = []
-    read_tokens = set(state.get("boswell_read_tokens") or [])
     for rank, item in enumerate(results):
         row = _automatic_context_candidate(item, rank)
         if row is None:
             continue
         slim.append(row)
-        read_tokens.update(session_state.tokens(row))
+        _remember_read_tokens(state, json.dumps(row, ensure_ascii=False))
         if len(slim) >= AUTO_CONTEXT_MAX_RESULTS:
             break
     state["last_prompt_fingerprint"] = fingerprint
     state["last_prompt_tokens"] = sorted(session_state.tokens(prompt))[:250]
-    state["boswell_read_tokens"] = sorted(read_tokens)[:1000]
     state["last_retrieval"] = slim
     state["last_retrieval_at"] = time.time()
     session_state.save(sid, state)
@@ -669,7 +668,7 @@ def _pre_tool(data: dict) -> dict | None:
     if "boswell_commit" in tool:
         payload_text = json.dumps(_tool_input(data), ensure_ascii=False)
         if CORRECTIVE_RE.search(payload_text):
-            target = session_state.tokens(payload_text)
+            target = set(_substantive_read_words(payload_text))
             evidence = set(state.get("boswell_read_tokens") or [])
             generic = {
                 "correct", "correction", "corrected", "supersede", "supersedes",
@@ -697,14 +696,42 @@ def _response_text(data: dict) -> str:
     return ""
 
 
+def _substantive_read_words(text: str):
+    """Words useful for a corrective match, excluding IDs, paths and numbers."""
+    for match in session_state.TOKEN_RE.finditer(text):
+        word = match.group().lower().strip(".:/-")
+        if 5 <= len(word) <= 64 and all(part.isalpha() for part in word.split("-")):
+            yield word
+
+
+def _remember_read_tokens(state: dict, text: str) -> None:
+    # Dict insertion order keeps recently read words, including rare words from
+    # a late read. Sorting a mixed ledger used to keep 1,000 numeric/hash tokens
+    # and discard every word from a real read in a long Codex session.
+    previous = state.get("boswell_read_tokens") or []
+    recent: dict[str, None] = {}
+    if isinstance(previous, list):
+        for raw in previous[-READ_EVIDENCE_LIMIT:]:
+            if isinstance(raw, str):
+                for word in _substantive_read_words(raw):
+                    recent.pop(word, None)
+                    recent[word] = None
+    for word in _substantive_read_words(text):
+        recent.pop(word, None)
+        recent[word] = None
+        if len(recent) > READ_EVIDENCE_LIMIT:
+            del recent[next(iter(recent))]
+    state["boswell_read_tokens"] = list(recent)
+
+
 def _add_read_tokens(state: dict, data: dict) -> None:
     """Fold one Boswell read into the corrective-gate evidence ledger, in place."""
     if not READ_TOOL_RE.search(_tool_name(data)):
         return
-    evidence = json.dumps(_tool_input(data), ensure_ascii=False) + " " + _response_text(data)
-    tokens = set(state.get("boswell_read_tokens") or [])
-    tokens.update(session_state.tokens(evidence))
-    state["boswell_read_tokens"] = sorted(tokens)[:1000]
+    response = _response_text(data)
+    if response:
+        # A search query is not proof that Boswell returned the matching fact.
+        _remember_read_tokens(state, response)
 
 
 def record_read(data: dict) -> None:
