@@ -38,6 +38,9 @@ VERIFY_RE = re.compile(
 FAILURE_RE = re.compile(r"exit code:\s*[1-9]|\b(failed|failure|traceback)\b", re.IGNORECASE)
 READ_TOOL_RE = re.compile(r"boswell_(search|semantic_search|recall|fetch|head|log|brief|manifest)")
 READ_EVIDENCE_LIMIT = 1000
+READ_FACT_SCAN_CHARS = 128 * 1024
+READ_FACT_JSON_CHARS = 256 * 1024
+READ_FACT_SCAN_NODES = 2048
 MUTATION_TOOLS = {"apply_patch", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 MATERIAL_TOOLS = MUTATION_TOOLS | {"Bash", "shell_command"}
 APPLY_PATCH_DELETE_PREFIX = "*** Delete File: "
@@ -724,14 +727,77 @@ def _remember_read_tokens(state: dict, text: str) -> None:
     state["boswell_read_tokens"] = list(recent)
 
 
+def _boswell_fact_text(data: dict) -> str:
+    """Extract returned fact bodies, never a search query or MCP error echo."""
+    if data.get("isError") is True or data.get("is_error") is True:
+        return ""
+    response = next((data[key] for key in ("tool_response", "tool_result", "response")
+                     if key in data), None)
+    parts: list[str] = []
+    remaining = READ_FACT_SCAN_CHARS
+    visited = 0
+
+    def visit(value: object, *, envelope: bool = False) -> None:
+        nonlocal remaining, visited
+        if remaining <= 0 or visited >= READ_FACT_SCAN_NODES:
+            return
+        visited += 1
+        if isinstance(value, dict):
+            if (value.get("isError") is True or value.get("is_error") is True
+                    or value.get("error") or value.get("status") in ("error", "failed")):
+                return
+            if value.get("type") == "text" and "text" in value:
+                visit(value["text"], envelope=True)
+                return
+            # Structured MCP content is authoritative when present. The text
+            # sibling often serializes the entire search envelope, including
+            # its echoed query, and must not become corrective evidence.
+            if value.get("structuredContent"):
+                visit(value["structuredContent"], envelope=True)
+                return
+            if "results" in value:
+                visit(value["results"])
+                return
+            for key in ("result", "entries", "items", "commits", "records",
+                        "memories", "content", "message", "text", "body",
+                        "summary", "description", "context", "narrative"):
+                if key in value:
+                    visit(value[key], envelope=key == "result")
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, envelope=envelope)
+                if remaining <= 0 or visited >= READ_FACT_SCAN_NODES:
+                    break
+        elif isinstance(value, str):
+            stripped = value.lstrip()
+            if envelope and stripped.startswith(("{", "[")):
+                if len(value) > READ_FACT_JSON_CHARS:
+                    return  # A too-large envelope needs a targeted read.
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list) or (isinstance(parsed, dict) and
+                            any(key in parsed for key in (
+                                "query", "results", "structuredContent", "content",
+                                "result", "isError", "error", "message"))):
+                        visit(parsed)
+                        return
+                except json.JSONDecodeError:
+                    pass
+            clipped = value[:remaining]
+            parts.append(clipped)
+            remaining -= len(clipped)
+
+    visit(response, envelope=isinstance(response, str))
+    return " ".join(parts)
+
+
 def _add_read_tokens(state: dict, data: dict) -> None:
     """Fold one Boswell read into the corrective-gate evidence ledger, in place."""
     if not READ_TOOL_RE.search(_tool_name(data)):
         return
-    response = _response_text(data)
-    if response:
-        # A search query is not proof that Boswell returned the matching fact.
-        _remember_read_tokens(state, response)
+    facts = _boswell_fact_text(data)
+    if facts:
+        _remember_read_tokens(state, facts)
 
 
 def record_read(data: dict) -> None:

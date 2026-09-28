@@ -692,6 +692,83 @@ class CodexHookTests(unittest.TestCase):
         self.assertIsNotNone(decision)
         self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
 
+    def test_search_echo_and_mcp_error_are_not_returned_fact_evidence(self):
+        query = "zebraprovenance zetaoriginal"
+        empty = {"query": query, "count": 0, "results": []}
+        responses = (
+            empty,
+            {"structuredContent": empty,
+             "content": [{"type": "text", "text": json.dumps(empty)}], "isError": False},
+            {"content": [{"type": "text", "text": json.dumps(empty)}]},
+            {"isError": True, "content": [{"type": "text", "text": query}]},
+            {"structuredContent": {"isError": True, "content": query}},
+        )
+        for index, response in enumerate(responses):
+            with self.subTest(index=index):
+                sid = f"empty-mcp-{index}"
+                session_state.save_startup_cache(sid, self.startup_payload())
+                session_state.save(sid, {"startup_loaded": True})
+                dispatcher.record_read({
+                    "session_id": sid,
+                    "tool_name": "mcp__Boswell-Atlas__boswell_search",
+                    "tool_input": {"query": query},
+                    "tool_response": response,
+                })
+                decision = dispatcher._pre_tool({
+                    "session_id": sid,
+                    "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+                    "tool_input": {"message": "CORRECTION: zebraprovenance replaces zetaoriginal"},
+                })
+                self.assertIsNotNone(decision)
+                self.assertEqual(decision["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_wrapped_returned_fact_after_numeric_noise_remains_available(self):
+        sid = "long-returned-fact"
+        session_state.save_startup_cache(sid, self.startup_payload())
+        session_state.save(sid, {"startup_loaded": True})
+        fact = " ".join(f"{i:04d}" for i in range(2000)) + " Original meeting audio was not retained."
+        self.assertGreater(fact.index("Original meeting"), 6000)
+        dispatcher.record_read({
+            "session_id": sid,
+            "tool_name": "mcp__Boswell-Atlas__boswell_search",
+            "tool_input": {"query": "archived source"},
+            "tool_response": {
+                "structuredContent": {"query": "archived source", "count": 1,
+                                      "results": [{"content": fact}]},
+                "content": [{"type": "text", "text": "Returned one result."}],
+                "isError": False,
+            },
+        })
+        self.assertIsNone(dispatcher._pre_tool({
+            "session_id": sid,
+            "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+            "tool_input": {"message": "CORRECTION: original meeting audio can be retained"},
+        }))
+
+    def test_mcp_text_result_and_json_fact_body_remain_readable(self):
+        for index, response in enumerate((
+            {"content": [{"type": "text", "text": json.dumps({
+                "query": "archived source", "count": 1,
+                "results": [{"content": "Original meeting audio was not retained."}],
+            })}]},
+            {"content": json.dumps({"participant": "Original meeting audio was not retained."})},
+        )):
+            with self.subTest(index=index):
+                sid = f"json-fact-{index}"
+                session_state.save_startup_cache(sid, self.startup_payload())
+                session_state.save(sid, {"startup_loaded": True})
+                dispatcher.record_read({
+                    "session_id": sid,
+                    "tool_name": "mcp__Boswell-Atlas__boswell_recall",
+                    "tool_input": {"commit": "known-fact"},
+                    "tool_response": response,
+                })
+                self.assertIsNone(dispatcher._pre_tool({
+                    "session_id": sid,
+                    "tool_name": "mcp__Boswell-Atlas__boswell_commit",
+                    "tool_input": {"message": "CORRECTION: original meeting audio is retained"},
+                }))
+
     @mock.patch.object(dispatcher.transcript_spool, "capture", return_value=None)
     def test_stop_gate_blocks_once_then_allows(self, _capture):
         session_state.save("s4", {
