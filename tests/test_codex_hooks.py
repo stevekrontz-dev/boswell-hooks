@@ -112,6 +112,7 @@ class CodexHookTests(unittest.TestCase):
             "verbosity": "warm",
             "agent_id": "Test Client",
             "timezone": "Europe/London",
+            "projection": "cards",
         })
 
     def test_named_tenant_profile_outranks_stale_environment_key(self):

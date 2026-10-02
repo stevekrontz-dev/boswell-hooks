@@ -82,8 +82,11 @@ def startup(timeout: float | None = None) -> dict:
     from opening_briefing import TASK_LIMIT, task_snapshot
     budget = timeout if timeout is not None else REQUEST_TIMEOUT
     started = time.monotonic()
+    # Orientation renders only authority and task cards, so ask the server not
+    # to trade tasks for continuity prose; older servers ignore the parameter.
     response = _request("GET", "/v2/startup", params={
         "verbosity": "warm", "agent_id": AGENT_ID, "timezone": TIMEZONE,
+        "projection": "cards",
     }, timeout=budget)
     if isinstance(response.get('work_briefing'), dict) and response['work_briefing'].get('contract') == 'cards-v1':
         return response
