@@ -284,9 +284,24 @@ def flush_pending_transcripts():
     return (committed, len(survivors))
 
 
+def _v1_spool_count():
+    """Entries the retired v1 spool left here as a dict keyed by session.
+
+    _read_queue() treats that shape as empty, so without this count those
+    unbound cards were quarantined invisibly. Count only; never read them
+    for upload or rewrite the file.
+    """
+    try:
+        data = json.loads(_queue_path().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return 0
+    return len(data) if isinstance(data, dict) else 0
+
+
 def check_pending():
     """Drain the queue and return one startup notice if entries remain."""
     _committed, remaining = flush_pending_transcripts()
+    remaining += _v1_spool_count()
     if remaining <= 0:
         return None
     queue_file = _queue_path()

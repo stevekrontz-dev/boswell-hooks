@@ -113,6 +113,18 @@ def test_legacy_monitor_never_uploads_unbound_queue(identity, monkeypatch):
     commit.assert_not_called()
 
 
+def test_v1_dict_queue_is_reported_but_never_uploaded(identity, monkeypatch):
+    import boswell_client
+    commit = Mock()
+    monkeypatch.setattr(boswell_client, 'commit', commit)
+    queue = transcript_monitor._queue_path()
+    raw = json.dumps({'old': {'index_card': {'session_id': 'old'}}})
+    queue.write_text(raw, encoding='utf-8')
+    notice = transcript_monitor.check_pending()
+    assert notice and '1 item(s) remain' in notice
+    assert queue.read_text(encoding='utf-8') == raw
+    commit.assert_not_called()
+
 def test_capture_requires_exact_event_transcript_and_session_binding(identity, monkeypatch):
     binding = importlib.import_module('tenant_binding')
     source = identity/'mine.jsonl'
