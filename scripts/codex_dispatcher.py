@@ -235,6 +235,8 @@ def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> st
         }
 
     projection["work_state"] = work_state_orientation.project(payload.get("work_state"))
+    if isinstance(payload.get("startup_capabilities"), dict):
+        projection["startup_capabilities"] = payload["startup_capabilities"]
     if isinstance(payload.get("work_briefing"), dict):
         projection["work_briefing"] = payload["work_briefing"]
 
@@ -308,7 +310,7 @@ def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> st
     if len(render()) > max_chars:
         compact = {
             key: projection.get(key) for key in (
-                "local_time", "sacred_manifest", "agent_id", "startup_integrity", "work_state", "work_briefing")
+                "local_time", "sacred_manifest", "agent_id", "startup_integrity", "work_state", "work_briefing", "startup_capabilities")
             if projection.get(key) is not None
         }
         if continuity:
@@ -335,6 +337,8 @@ def _orientation(payload: dict, *, max_chars: int = ORIENTATION_MAX_CHARS) -> st
             hook_trimmed = True
     integrity["hook_projection"]["status"] = (
         "trimmed" if hook_trimmed else "within_limit")
+    if len(render()) > max_chars:
+        projection.pop("startup_capabilities", None)
     rendered = render()
     if len(rendered) > max_chars:
         raise OrientationBudgetExceeded(
