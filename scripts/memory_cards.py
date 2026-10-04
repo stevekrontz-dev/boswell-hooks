@@ -46,6 +46,8 @@ def orient(payload,header,max_chars):
         cards.append(card)
     projection={'authority':authority,'record_guidance':GUIDANCE,
         'work_briefing':{key:value for key,value in brief.items() if key!='tasks'}}
+    if isinstance(payload.get('startup_capabilities'), dict):
+        projection['startup_capabilities'] = payload['startup_capabilities']
     target=projection['work_briefing']
     # Shared metadata is carried once, with explicit defaults for every row.
     # No card text, hash, constraint or owner is shortened to meet the budget.
@@ -62,5 +64,7 @@ def orient(payload,header,max_chars):
         count=target.get('unfinished_count')
         target['omitted_count']=max(0,count-target['returned']) if type(count) is int else None
         target['truncated']=True
+    if len(render())>max_chars:
+        projection.pop('startup_capabilities', None)
     if len(render())>max_chars: raise ValueError('Governing manifest exceeds host context budget')
     return render()

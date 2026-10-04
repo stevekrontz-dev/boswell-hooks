@@ -9,6 +9,26 @@ import memory_cards
 import pytest
 
 
+def test_capability_note_survives_card_orientation_as_complete_data():
+    note = {'authority': 'data', 'content': 'Thalamus is a browser route; check connectivity.',
+            'connectivity': 'not_checked', 'source_hash': 'a' * 64}
+    payload = {'authority': {'manifest': {'active_commitments': []}},
+               'startup_capabilities': note,
+               'work_briefing': {'contract': 'cards-v1', 'tasks': [card()]}}
+    for budget in (9000, 12000):
+        rendered = codex._orientation(payload, max_chars=budget)
+        assert json.loads(rendered.split('\n', 1)[1])['startup_capabilities'] == note
+
+
+def test_optional_capability_note_cannot_displace_governing_manifest():
+    payload = {'authority': {'manifest': {'active_commitments': ['rule ' * 200]}},
+               'work_briefing': {'contract': 'cards-v1', 'tasks': []}}
+    baseline = codex._orientation(payload, max_chars=9000)
+    payload['startup_capabilities'] = {'authority': 'data', 'content': 'browser ' * 100}
+    rendered = codex._orientation(payload, max_chars=len(baseline))
+    assert rendered == baseline
+
+
 def card(i=0):
     return {'hash':f'{i:064x}','text':'Paper only; MUST revert if live.','origin':'external',
             'author':'ingest','authority':'data','detail_required':True,'provenance_verified':True,
