@@ -180,6 +180,40 @@ def test_noop_does_not_accumulate_release_directories(installer, signed, tmp_pat
     assert sorted((root/'releases').iterdir()) == before
 
 
+def _dacl_protected(path):
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL('advapi32', use_last_error=True)
+    advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD,
+                                             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                             ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.GetSecurityDescriptorControl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD),
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    descriptor = ctypes.c_void_p()
+    # SE_FILE_OBJECT=1, DACL_SECURITY_INFORMATION=4
+    assert advapi.GetNamedSecurityInfoW(str(path), 1, 4, None, None, None, None,
+                                        ctypes.byref(descriptor)) == 0
+    try:
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        assert advapi.GetSecurityDescriptorControl(descriptor, ctypes.byref(control), ctypes.byref(revision))
+        return bool(control.value & 0x1000)  # SE_DACL_PROTECTED
+    finally:
+        ctypes.windll.kernel32.LocalFree(descriptor)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows release ACL inheritance')
+def test_release_directory_inherits_profile_acl(installer, signed, tmp_path):
+    # mkdtemp's private Windows ACL grants only OWNER RIGHTS; an elevated install
+    # makes Administrators the owner and the user's ordinary host is denied.
+    source, key, publish = signed
+    root = tmp_path/'install'
+    publish()
+    installer.install(source, key, root, 'claude-code', manager=lambda *args: None)
+    [release] = (root/'releases').iterdir()
+    assert release.name.startswith('verified-')
+    assert not _dacl_protected(release)
+
+
 def test_interrupted_first_install_reuses_pending_identity(installer, signed, tmp_path):
     source, key, publish = signed
     root = tmp_path/'install'

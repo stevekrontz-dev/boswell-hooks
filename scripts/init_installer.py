@@ -69,6 +69,28 @@ def load_json(path):
     return json.loads(read(path, MAX_CATALOG)) if Path(path).exists() else None
 
 
+def new_release_dir(releases):
+    """Create a fresh, empty release directory the profile user can always read.
+
+    On Windows, Python 3.13+ gives mkdtemp's 0o700 directory a protected DACL
+    granting only OWNER RIGHTS, SYSTEM and Administrators. An elevated install
+    (e.g. over OpenSSH as an admin) makes Administrators the owner, so the same
+    user's ordinary host process is denied, and the host silently drops the
+    plugin. Inheriting the releases directory's ACL grants that user by SID
+    whatever the installer's elevation.
+    """
+    if os.name != 'nt':
+        return Path(tempfile.mkdtemp(prefix='verified-', dir=releases))
+    for _ in range(100):
+        candidate = releases/('verified-' + uuid.uuid4().hex[:8])
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+    raise InstallError('Could not create a unique release directory')
+
+
 @contextmanager
 def install_lock(root):
     root.mkdir(parents=True, exist_ok=True)
@@ -376,7 +398,7 @@ def install(source, key, root, host, *, manager=host_manager, accept_scope=False
         present = manager_present(host, current) if current and manager is host_manager else True
         releases = root/'releases'
         releases.mkdir(exist_ok=True)
-        stage = Path(tempfile.mkdtemp(prefix='verified-', dir=releases))
+        stage = new_release_dir(releases)
         release, artifact = acquire(source, stage, pinned if pinned.exists() else key, host)
         if current:
             if not _rollback and version(release['version']) < version(current['version']):
